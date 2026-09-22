@@ -1,0 +1,16 @@
+# Compilacion y cache
+build/
+.cache/
+*.apk
+*.idsig
+*.dex
+
+# NUNCA subir la clave de firma
+*.keystore
+*.jks
+
+# Efectos del Cylinder original: no tienen licencia, asi que no se
+# redistribuyen. ./efectos.sh --rweichler los descarga de su repo.
+efectos/rweichler/
+
+.DS_Store
