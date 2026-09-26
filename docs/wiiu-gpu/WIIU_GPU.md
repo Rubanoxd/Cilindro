@@ -33,8 +33,10 @@
 > - **Parte 31** — A': NetBSD tenía razón (IPI núcleo n = bit 20−n); rutina de Nintendo; recuento de `stwcx.`.
 > - **Parte 32** — Entrada de IPIs, valores de Nintendo, trampolín, diseño del parche de `stwcx.`.
 > - **Parte 33** — `__HIB,__data` es la pila de interrupciones; hueco en la commpage.
-> - **Parte 34** — La commpage MP se elige al arrancar (`ml_get_max_cpus`) → SMP y parche en `WiiPE`/`WiiCPU` con `-wiismp`; **plan (34.5)**.
-> - Si algo se contradice, vale la parte **más reciente** (34 > 33 > 32 > …).
+> - **Parte 34** — La commpage MP se elige al arrancar (`ml_get_max_cpus`) → SMP y parche en `WiiPE`/`WiiCPU` con `-wiismp`.
+> - **Parte 35** — ✅ Parche de `stwcx.` en caliente (142 sitios) probado en UP.
+> - **Parte 36** — Escaneo con símbolos en el arranque, qué entra en `-wiismp cpus=1`, kexts; **plan (36.4)**.
+> - Si algo se contradice, vale la parte **más reciente** (36 > 35 > 34 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -51,14 +53,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 34.5** (pmset + comprobación de __HIB → parche de prueba en caliente → WiiPE/WiiCPU con -wiismp → núcleo 1).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 36.4** (WiiPE con -wiismp cpus=1 → recuento en kexts → núcleo 1).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -2624,5 +2626,70 @@ Secuencia con `-wiismp` (todo en el mkext; sin el flag no se hace nada):
 | 3 | Mover esa lógica a `WiiPE::start` con `-wiismp`; arrancar con `-wiismp cpus=1` | bajo (quitar el flag) |
 | 4 | `WiiCPU` con `numCPUs` según boot‑args; con `-wiismp cpus=2`, comprobar solo que la commpage sale con variantes MP (vm_read) **sin despertar todavía el núcleo** (dejar que `startCPU` devuelva error; ojo: `IOCPUInterruptController` bloquearía el PI → antes de esta prueba, confirmar que el bloqueo solo afecta a `registerInterrupt` y no se cuelga el arranque; si se cuelga, saltar al paso 5) | medio |
 | 5 | Parche de la commpage + trampolín + `WAKE(1)` (`-wiismp cpus=2`) | alto (foto; quitar el flag) |
+| 6 | Estrés de atómicos + uso normal | medio |
+| 7 | libSystem/CoreGraphics si hace falta; L2; núcleo 2 | alto |
+
+---
+
+# PARTE 35 — Plan 34.5, pasos 1–2 (2026-09-27), resumen del Claude del Mac
+- `pmset -a hibernatemode 0 sleep 0` aplicado.
+- **¿Quién llama a `__HIB,__text` desde fuera?** `hibernate_page_list_setall/discard`, `hibernate_set_page_state` y `hibernate_write_image` (desde `ml_ppc_sleep`), y **`cpu_machine_init` → `hibernate_machine_init`** (también en los secundarios), que en arranque normal vuelve enseguida. Conclusión: **`__HIB,__text` es reutilizable sin hibernación.**
+- **Parche en caliente (UP) probado:** `WiiStwcxPatch`, **142 sitios**.
+  - Cálculo: 165 − 23 dentro de plantillas de la commpage (`compare_and_swap*`, `atomic_*`, `spinlock_*`, `bigcopy_970`, `pthread_self_uftrap`).
+  - Stubs en `0xC020–0xC6C8`; cada sitio pasa a `ba stub` por un mapeo físico, con `dcbst/sync/icbi/sync/isync`. 0 discrepancias.
+  - Probado con `make`, 8 `dd` en paralelo y el WindowServer por la GPU: sin incidencias. Al descargarlo restaura el original.
+  - Sitios: ~66 en `hw_vm.s`, `fpu/vec_switch`, locks (`mutex_*`, `lck_*`, `*Patch_isync/eieio`), `hw_atomic_*`, `OSAddAtomic`, `IOTrySpinLock`… Algunos se ejecutan con la traducción desactivada: `ba` funciona porque el kernel es V=R.
+
+---
+
+# PARTE 36 — Respuestas a la Parte 35
+
+## 36.1 Tabla fija o escaneo en el arranque → **escaneo con símbolos + comprobación del recuento**
+- **Hay tabla de símbolos en el arranque:** `WiiPE_Patcher.cpp` ya localiza la cabecera Mach‑O del kernel (`findKernelMachHeader`) y su `LC_SYMTAB`/`__LINKEDIT` (usa `nlist`). En `WiiPE::start`, que va muy pronto y antes de que se descarten los símbolos del kernel, `__LINKEDIT` sigue en memoria [comprobar: si en algún caso no estuviera, abortar el parche].
+- **Algoritmo:**
+  1. Recorrer `__TEXT,__text` buscando `(insn & 0xFC0007FF) == 0x7C00012D` (`stwcx.`).
+  2. Excluir los sitios que caen **dentro de las plantillas de la commpage**. El rango de cada plantilla va desde su símbolo hasta el siguiente símbolo de `__text` (ordenar el `nlist` por dirección). Lista de nombres a excluir: la misma que usaste (`compare_and_swap*`, `atomic_*`, `spinlock_*`, `bigcopy_970`, `pthread_self_uftrap`…). Guárdala en el código como lista de prefijos.
+  3. **Comprobación de seguridad:** si `sw_vers`/`version` del kernel es `8.11.0` y el recuento no es **142**, **no parchear** y registrar el error. Para otras versiones, desactivado por defecto (o solo con un boot‑arg de "forzar" y registrando la lista).
+  4. Además, exigir que cada stub quepa en `__HIB,__text` (`0xC020–0xCD60`), comprobándolo con los símbolos de ese rango.
+- **Ventaja:** no depende de una tabla precalculada, pero sigue siendo prudente fuera de 10.4.11. La tabla offline sirve como prueba cruzada en el primer arranque: registrar las 142 direcciones y compararlas.
+
+## 36.2 Qué entra en el paso 3 (`-wiismp cpus=1`)
+**Entra:**
+- El parche de `stwcx.` del kernel en `WiiPE::start` (36.1), solo con `-wiismp`.
+- El cálculo `numCPUs = 1 + secundarios` en `WiiCPU`. Con `cpus=1` vale 1: el mismo camino de siempre, pero ejercitando el código nuevo.
+- El registro en el log de todo lo que se decide (flags, recuento de parches, `numCPUs`).
+- `HID5 |= PIRE` (inocuo; lo hacen Nintendo y NetBSD). Leer `PIR` antes y después.
+
+**Espera al paso 5 (justo antes del `WAKE`):**
+- `CAR |= 0xFC100000` y `BCR = 0x08000000`: semántica desconocida y globales. Mínimo tiempo de exposición.
+- Trampolín en MEM0, parche de la commpage, IPIs por SCR/PI, `INTMSK(1)`.
+
+Criterio de éxito del paso 3: arranque normal, `hw.ncpu = 1`, WindowServer por la GPU, `make` y uso normal sin incidencias. Comparar tiempos con y sin `-wiismp`: el `dcbst` extra en cada `stwcx.` cuesta un poco.
+
+## 36.3 `lwarx/stwcx.` en kexts
+- **Contar antes de despertar el núcleo 1:**
+  ```bash
+  for f in /System/Library/Extensions/*.kext/Contents/MacOS/* \
+           /System/Library/Extensions/*.kext/Contents/PlugIns/*.kext/Contents/MacOS/*; do
+    n=$(otool -tv "$f" 2>/dev/null | grep -c 'stwcx\.'); [ "$n" -gt 0 ] && echo "$n $f"
+  done | sort -rn
+  ```
+  y lo mismo con los kexts de Wiintosh/GX2 (fuentes: buscar `stwcx`/`lwarx`/`__sync_` en el código).
+- **Lo esperable:** casi todos los kexts usan los atómicos **exportados por el kernel** (`OSAddAtomic`, `OSCompareAndSwap`, `IOLock*`, `IOSimpleLock*`, `lck_*`), que ya quedan parcheados en el kernel. Solo tendrán `stwcx.` propios los que lleven ensamblador en línea.
+- **Qué hacer según el resultado:**
+  - **0 o pocos, y en kexts que no se usan en la Wii U** (drivers de hardware Apple que no cargan): ignorarlos.
+  - **En kexts cargados** (`kextstat`): parchearlos en `WiiCPU::startCPU` antes del `WAKE`, recorriendo `kmod_info` (dirección y tamaño de cada kext cargado). Los stubs tienen que estar a ±32 MB del kext (no hay `ba` a esas direcciones): reservar una página de stubs **por kext** junto a él (`kmem_alloc` no lo garantiza; alternativa: usar la holgura final del `__TEXT` del propio kext, como en espacio de usuario).
+  - Kexts cargados **después** del `WAKE` no se cubren. Si alguno relevante tiene `stwcx.`, documentarlo o cargarlo antes.
+  - Los propios (Wiintosh, GX2): si alguno tiene `stwcx.` en línea, añadir `dcbst` en el código fuente.
+- Contar también en los binarios de usuario más usados (ya hecho: libSystem 5, CoreGraphics 20) y, por completitud, en `/usr/lib/*.dylib` y `/System/Library/Frameworks/*/…` con el mismo bucle, para saber el alcance real del espacio de usuario.
+
+## 36.4 Plan (sustituye a 34.5)
+| # | Paso | Riesgo |
+|---|---|---|
+| 1 | ✅ pmset + comprobación de `__HIB` | — |
+| 2 | ✅ Parche en caliente (UP), 142 sitios | — |
+| 3 | `WiiPE::start` con escaneo + símbolos + recuento de 142, `HID5 PIRE`, `numCPUs` según boot‑args; arrancar con `-wiismp cpus=1` | bajo |
+| 4 | Recuento de `stwcx.` en kexts y bibliotecas (36.3) | ninguno |
+| 5 | `-wiismp cpus=2`: CAR/BCR, parche de la commpage (MP), kexts si hace falta, trampolín, IPIs, `WAKE(1)` | alto (foto; quitar el flag) |
 | 6 | Estrés de atómicos + uso normal | medio |
 | 7 | libSystem/CoreGraphics si hace falta; L2; núcleo 2 | alto |
