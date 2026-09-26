@@ -31,8 +31,10 @@
 > - **Parte 29** — Issue #24 y prueba A (el bit 20 no se latchea).
 > - **Parte 30** — MEM0 = vector alto de reset, ⚠️ errata `stwcx.` de Espresso (la lectura de los bits de ICI de 30.1 era errónea: ver 31).
 > - **Parte 31** — A': NetBSD tenía razón (IPI núcleo n = bit 20−n); rutina de Nintendo; recuento de `stwcx.`.
-> - **Parte 32** — Entrada de IPIs, valores de Nintendo, trampolín, **diseño del parche de `stwcx.`** y **plan SMP (32.4)**.
-> - Si algo se contradice, vale la parte **más reciente** (32 > 31 > 30 > …).
+> - **Parte 32** — Entrada de IPIs, valores de Nintendo, trampolín, diseño del parche de `stwcx.`.
+> - **Parte 33** — `__HIB,__data` es la pila de interrupciones; hueco en la commpage.
+> - **Parte 34** — La commpage MP se elige al arrancar (`ml_get_max_cpus`) → SMP y parche en `WiiPE`/`WiiCPU` con `-wiismp`; **plan (34.5)**.
+> - Si algo se contradice, vale la parte **más reciente** (34 > 33 > 32 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -49,14 +51,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 32.4** (parche de stwcx. en kernel y commpage → -wiismp con núcleo 1 → prueba de estrés).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 34.5** (pmset + comprobación de __HIB → parche de prueba en caliente → WiiPE/WiiCPU con -wiismp → núcleo 1).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -2557,3 +2559,70 @@ Salto de ida: `b stub_i` (relativo, ±32 MB) o `ba stub_i` (absoluto, < 32 MB). 
 | 5 | Prueba de estrés de atómicos en usuario + uso normal | medio |
 | 6 | Si hace falta: parche en disco de libSystem/CoreGraphics (32.3‑3) | medio |
 | 7 | L2 en los secundarios; núcleo 2 | alto |
+
+---
+
+# PARTE 33 — Dónde poner los stubs (2026-09-27), resumen del Claude del Mac
+- **`__HIB` no está libre:** `__HIB,__data` (0x7000–0xC00C) empieza con `_intstack` (la pila de interrupciones). Solo **`__HIB,__text` (0xC020–0xCD60, 3 392 B)** sería reutilizable (`hibernate_restore_phys_page`, `hibernate_machine_entrypoint`, `WKdm_decompress`, `hibernate_sum`, `hibernate_page_*`, `hibernate_kernel_entrypoint`). Caben 165 × 12 B = 1 980 B.
+- **Commpage:** página `0xFFFF8000` usada hasta +0xFA8, 84 B libres, 7 `stwcx.` (variantes UP); página `0xFFFF9000` usada hasta +0x3F4, **3 080 B libres**, 0 `stwcx.`. `_commpage_populate` = 0xBCE70; `_commPagePtr32` = 0x36E000.
+- Propuesta: parchear en caliente desde un kext (un núcleo, interrupciones desactivadas).
+
+---
+
+# PARTE 34 — Respuestas a la Parte 33
+
+## 34.1 La clave: la commpage se decide en el arranque, así que SMP (y el parche) van en el arranque
+xnu‑792:
+- `osfmk/kern/startup.c`: `PE_init_iokit()` → … → **`commpage_populate()`**, antes de lanzar el espacio de usuario.
+- `commpage_populate()` → `commpage_init_cpu_capabilities()` → `commpage_cpus()` → **`ml_get_max_cpus()`**, que **se duerme hasta que alguien fija el máximo de CPU** (`MAX_CPUS_SET`, `machine_routines.c` l.502). Quien lo fija es **`ml_init_max_cpus(numCPUs)`**, que se llama desde **`IOCPUInterruptController::initCPUInterruptController(numCPUs)`**, es decir, desde **`WiiCPU::start`**.
+- Si `cpus == 1` → `_cpu_capabilities |= kUP` → se copian las variantes **UP** (`spinlock_32_*_up`, `memory_barrier_up`); si es > 1, las **MP**. Se hace **una sola vez** ("called once, during kernel initialization … before user-mode code is running").
+
+⇒ **Con `-wiismp` y `numCPUs = 2` en `WiiCPU::start`, XNU elige solo las variantes MP de la commpage al arrancar.** No hay que forzar nada. Hacerlo en caliente, en cambio, dejaría la commpage UP, que no es válida con SMP. Volver a llamar a `commpage_populate` con usuarios en marcha no es seguro: se reescribe código que se está ejecutando. **Por eso el SMP real debe decidirse en el arranque (mkext de WiiPlatform con `-wiismp`), no en caliente.**
+
+## 34.2 ¿Parchear el `__text` del kernel en caliente? Vale **como banco de pruebas en UP**, no como mecanismo definitivo
+- **Escritura:** el texto del kernel está mapeado sin escritura. Escribe por un **mapeo físico propio** (`IOMemoryDescriptor::withPhysicalAddress(pa, len, kIODirectionInOut)` + `map()`), o con `ml_phys_write`. El kernel está 1:1 (VA = PA), así que la dirección física es la del símbolo.
+- **Cachés**, por cada palabra escrita:
+  1. `dcbst` sobre la línea (desde el mapeo por el que escribiste);
+  2. `sync`;
+  3. `icbi` sobre la **dirección de ejecución** (la VA del kernel);
+  4. `sync; isync`.
+
+  El 750 no tiene I‑cache coherente con la D‑cache. Hazlo con las interrupciones desactivadas, y **primero escribe y sincroniza los stubs**, y después sustituye los `stwcx.`.
+- **BAT:** en xnu‑792 PPC los BAT solo se usan para la E/S (`PEMapSegment`) y el vídeo; el texto del kernel va por la tabla de páginas. Un mapeo físico propio no choca con eso [comprobar que la VA del mapeo no cae en un segmento con BAT].
+- **Código ejecutándose:** con un solo núcleo y `EE = 0`, nadie ejecuta otra cosa mientras escribes. El caso "un hilo entre `lwarx` y `stwcx.`" es correcto, como dices. El kext que parchea no debe usar ninguno de los sitios parcheados durante el parche (evita llamadas a `IOLog`/locks en ese tramo).
+- **Uso recomendado:** un kext de prueba que aplique el parche del kernel en UP (sin la commpage) para verificar el recuento (165 − los de la commpage que estén en `__TEXT`), que no rompe nada y que la lógica de generar/validar stubs es correcta. **La versión definitiva, la misma lógica ejecutada en `WiiPE::start`** (ver 34.4).
+
+## 34.3 Memoria para los stubs del kernel
+1. **`__HIB,__text` (0xC020–0xCD60)**: aceptable con condiciones.
+   - Esas funciones solo se ejecutan al **hibernar/restaurar** (`IOHibernateSystemSleep` desde `IOPMrootDomain` si `hibernatemode ≠ 0`; `hibernate_machine_entrypoint` lo llama el booter al restaurar). En 10.4 `WKdm` solo sirve para la imagen de hibernación.
+   - **Condiciones:**
+     - Poner `sudo pmset -a hibernatemode 0` y desactivar el reposo (`pmset -a sleep 0`), porque `IOSleepSupported` aparece en `IOPMrootDomain`.
+     - Antes de parchear, buscar con `otool -tv /mach_kernel` referencias (`bl`/`b`) a esas funciones desde fuera de `__HIB`, para asegurarse de que solo las usa el camino de hibernación.
+     - Dejar **sin tocar** `_hashLookupTable` (0xCD60, datos) y `_gIOHibernateCurrentHeader`.
+   - 1 980 B de 3 392: hay margen.
+2. **Alternativa más limpia (si lo anterior da reparos):** que **OpenBIOS reserve una página de MEM1** (p. ej. `0x01FF0000`), la quite de `PhysicalDRAM` y la meta en el mapa de memoria de XNU como región del kernel ejecutable. Lo difícil es que XNU la mapee ejecutable; habría que hacerlo con el mismo mecanismo con que XNU mapea `__TEXT`. Más trabajo; solo si `__HIB,__text` no sirve.
+3. **Para la commpage:** los stubs van en **la segunda página (`0xFFFF9000`, 3 080 B libres)** y se llega con `b` relativo: la commpage es contigua, a ±4 KB. Las variantes MP tendrán más `stwcx.` que las 7 UP; recuéntalos tras un arranque con `-wiismp`.
+
+## 34.4 ¿OpenBIOS o WiiPlatform? → **WiiPlatform en el arranque, sin OpenBIOS**
+Secuencia con `-wiismp` (todo en el mkext; sin el flag no se hace nada):
+1. **`WiiPE::start`** (arranca muy pronto, con un solo núcleo, antes que `WiiCPU`): parchear los `stwcx.` del **kernel** (stubs en `__HIB,__text`, con la lógica validada en 34.2). Aplicar HID5 PIRE, y CAR/BCR según Nintendo/NetBSD.
+2. **`WiiCPU::start`** (núcleo 0): `numCPUs = 1 + secundarios habilitados` (según `cpus=N`), `initCPUInterruptController(numCPUs)` → esto desbloquea `commpage_populate`, que elige las variantes **MP**.
+3. **`WiiCPU::startCPU(núcleo 1)`**:
+   - Esperar (con timeout) a que la commpage esté poblada: `_commPagePtr32 != 0` y la palabra de `_COMM_PAGE_CPU_CAPABILITIES` con el número de CPU correcto.
+   - Parchear sus `stwcx.` (stubs en la página 2).
+   - Escribir el trampolín en `0x08100100` y `SCR |= WAKE(1)`.
+   - Riesgo de carrera: el espacio de usuario podría haber empezado ya a usar la commpage, pero con un solo núcleo activo y una escritura atómica por instrucción es seguro, igual que en el kernel.
+4. Los **kexts que se carguen después** con `stwcx.`: los de Wiintosh/GX2, compilarlos con `dcbst`. Para los de Apple, recuento con `otool` sobre `/System/Library/Extensions/*/Contents/MacOS/*`; si hay alguno relevante, parchearlo al cargarse o aceptar el riesgo.
+
+**Ventajas:** no hay que tocar OpenBIOS (del autor); todo el mecanismo va en un solo mkext; con el flag desactivado el sistema es idéntico al de siempre; y se prueba primero con `-wiismp cpus=1` (el parche activo, pero un solo núcleo: el sistema debe ir igual).
+
+## 34.5 Plan (sustituye a 32.4)
+| # | Paso | Riesgo |
+|---|---|---|
+| 1 | `pmset hibernatemode 0` + `sleep 0`; comprobar con `otool` que nada fuera de `__HIB` llama a sus funciones | ninguno |
+| 2 | Kext de prueba en caliente (UP): parche del kernel con stubs en `__HIB,__text`; contar y validar; uso normal un rato; reiniciar para deshacer | bajo |
+| 3 | Mover esa lógica a `WiiPE::start` con `-wiismp`; arrancar con `-wiismp cpus=1` | bajo (quitar el flag) |
+| 4 | `WiiCPU` con `numCPUs` según boot‑args; con `-wiismp cpus=2`, comprobar solo que la commpage sale con variantes MP (vm_read) **sin despertar todavía el núcleo** (dejar que `startCPU` devuelva error; ojo: `IOCPUInterruptController` bloquearía el PI → antes de esta prueba, confirmar que el bloqueo solo afecta a `registerInterrupt` y no se cuelga el arranque; si se cuelga, saltar al paso 5) | medio |
+| 5 | Parche de la commpage + trampolín + `WAKE(1)` (`-wiismp cpus=2`) | alto (foto; quitar el flag) |
+| 6 | Estrés de atómicos + uso normal | medio |
+| 7 | libSystem/CoreGraphics si hace falta; L2; núcleo 2 | alto |
