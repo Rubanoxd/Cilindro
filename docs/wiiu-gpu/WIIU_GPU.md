@@ -1488,3 +1488,187 @@ Las partes se escribieron en orden cronológico; donde se contradigan, **vale lo
 10. **Boot-arg de depuración:** `-wii<prefijo>dbg`, p. ej. `-wiifbdbg` (Parte 8.5).
 11. **GamePad:** no hay GamePad físico; Vanilla probablemente solo funciona en Aroma (Parte 4.2). La "2ª pantalla GamePad" queda aparcada.
 12. **Memoria:** MEM2 = `0x10000000–0x8FFFFFFF` (2 GB, NetBSD). Los framebuffers de Wiintosh están en los últimos 16 MB de MEM2; OpenBIOS mapea ≥`0x8F000000` como I/O. Reservar memoria nueva siempre con `IOBufferMemoryDescriptor` (Parte 11.1).
+
+---
+
+# PARTE 14 — Resultados en hardware (2026-09-26/27) y pregunta abierta
+
+> Escrita por Claude Code en el MacBook tras una sesión de pruebas en la Wii U real.
+> Todo lo de esta parte está **medido en la consola**, salvo lo marcado [NO VERIFICADO].
+> Prevalece sobre las Partes 1–13 donde se contradigan.
+
+## 14.1 Estado: qué funciona ya
+
+Código en el fork local `osx-drivers`, rama `gpu` (sin subir a GitHub). Bitácora completa en `docs/BITACORA.md`.
+
+| Pieza | Estado |
+|---|---|
+| Compilar en la propia Wii U (gcc-4.0.1, sin Darling) | ✅ Reproduce la release 0.5.2 con los mismos símbolos exportados. `make OSX_VERSION=tiger DARLING_SHELL= CC=gcc-4.0 CXX=g++-4.0 LD=/usr/bin/ld AS=/usr/bin/as`. **Siempre `make clean`**: el reloj de la Wii U va ~2 h adelantado y make no ve los cambios que llegan por rsync. |
+| Fase 0: sonda `WiiGX2Probe.kext` (carga en caliente) | ✅ Niveles 0–5, de solo lectura a pruebas de DMA |
+| Fase 2: anillo PM4, fence, IB | ✅ |
+| Motor 2D `WiiGX2Accel.kext` + user client + `gx2ctl` | ✅ Copia y relleno de rectángulos del framebuffer por CP_DMA, estable, 0 timeouts |
+| Fase 3: `WiiGX2GA.plugin` (plugin GA) | ✅ Lo carga `IOPSAllocateBlitEngine` (calidad 1000) y **el WindowServer lo arranca**, pero apenas lo usa (ver 14.4) |
+
+## 14.2 Datos del hardware confirmados
+
+- **Memoria:** OpenBIOS (`arch/ppc/wii/macosx/macosx.c`) le pasa a XNU `PhysicalDRAM = MEM1 0x0–0x01FFFFFF + MEM2 0x10000000–0x8DFFFFFF` = los 2 GB de `hw.physmem`. **`0x8E000000–0x8FFFFFFF` queda fuera del kernel**: ahí están el fb de la TV (`0x8F000000`, 0x384000) y el del GamePad (`0x8FE00000`). Resuelve la duda de 8.3/11.1.
+- **Estado que deja Cafe OS:** CP **parado** (`CP_ME_CNTL = 0x14000000`, ME_HALT|PFP_HALT). IH, DMA y RLC **apagados** (`IH_RB_CNTL` bit0 = 0, `DMA_RB_CNTL = 0`, `RLC_CNTL = 0`): la GPU no escribe en la RAM de Mac OS X. Los registros 3D de Cafe OS siguen puestos (`SQ_CONFIG = 0xE4000007`, `GB_TILING_CONFIG = 0x00044902`, `CC_GC_SHADER_PIPE_CONFIG = 0xFFFCF000` → probablemente 2 SIMD activos, como RV710).
+- **Microcódigo:** sigue cargado. Tamaños exactos de RV710 (ME 1360, PFP 848 palabras) y las 11 primeras palabras idénticas a `RV710_me.bin`, **pero es un firmware propio de Nintendo**: difieren 1053/1360 palabras del ME y 625/848 del PFP. Cargar el RV710 de linux-firmware (camino 3 del plan) queda desaconsejado. Hay un volcado privado en el Mac (no va al repo).
+- **Anillo:** la secuencia de Linux `r600_cp_resume` + `r600_cp_start` funciona sobre el microcódigo presente: `SOFT_RESET_CP` (no borra el microcódigo), `CP_RB_CNTL = bufsz | blksz<<8 | BUF_SWAP_32BIT | RB_NO_UPDATE`, `ME_INITIALIZE(1, 0, max_hw_contexts-1 = 3, DEVICE_ID(1))`, `CP_ME_CNTL = 0xFF`. `SET_CONFIG_REG(SCRATCH_REG0)` responde en < 10 µs.
+- **Fence:** `EVENT_WRITE_EOP(CACHE_FLUSH_AND_INV_EVENT_TS, EVENT_INDEX 5)` con la dirección `| 2` (ENDIAN_SWAP 8IN32) y DATA_SEL(1) escribe el valor de 32 bits con el orden correcto para la CPU big-endian.
+- **IB:** funciona con el opcode `0x32` (INDIRECT_BUFFER_PRIV, el que usa Linux) y la dirección `| 2` (swap). ⚠️ **Errata de la Parte 2 §6.3:** `0x3F` es el INDIRECT_BUFFER normal (no se ha probado); el verificado es `0x32`.
+- **CP_DMA (0x41):** copia memoria→memoria sin shaders (un paquete por fila, `CP_SYNC` en el último, `WAIT_UNTIL(WAIT_CP_DMA_IDLE)` + fence). No sirve para rellenar directamente (SAIC solo vale para registros); el relleno se hace copiando una fila del color desde RAM.
+  - ⚠️ Tras usar CP_DMA, `GRBM_STATUS` se queda en `0xA0003028` y `CP_STAT = 0x80100042` (ocupado) aunque los fences llegan. Parar con halt + `SOFT_RESET_CP` lo deja limpio. [causa NO VERIFICADA]
+- **IRQ de la GPU:** no probada. Con `DxMODE_INT_MASK = 0`, el bit 23 del PI no está pendiente (coherente con NetBSD).
+- **User client en 10.4 (xnu-792):** `is_io_connect_method_structureI_structureO` **omite el lado vacío**: con `count0 == 0` llama `(output, outputCount)` y con `count1 == 0` llama `(input, inputCount)`. Costó un kernel panic. Tiger además no exporta `__udivdi3` (nada de divisiones de 64 bits en kexts) y `clock_get_uptime` usa `AbsoluteTime`.
+
+## 14.3 Medidas (512×256 píxeles, 32 bpp, media de 10)
+
+| Operación | GPU (CP_DMA) | CPU sobre el fb |
+|---|---|---|
+| Leer 256 KB del fb a RAM | 142 µs (~1,8 GB/s) | 14,3–14,7 ms (**~18 MB/s**) |
+| Copia pantalla→pantalla 512 KB | 512 µs | 14 404 µs (**×28**) |
+| Relleno 512 KB | 571 µs | 1 650 µs (×2,9; escribir por CPU va a ~317 MB/s) |
+
+**Leer el framebuffer con la CPU es lentísimo; escribirlo no tanto.**
+
+## 14.4 El problema: el WindowServer carga el plugin pero casi no lo usa
+
+- Tras `killall loginwindow`, syslog: `WindowServer[510]: WiiGX2GA: started`. Contador de envíos a la GPU: 13 → 16 al iniciar la sesión.
+- El humano arrastró ventanas e hizo scroll un rato: **ningún glitch, ninguna mejora notable, y el contador se quedó en 16**. Quartz no pidió ni una copia al mover ventanas ni al hacer scroll.
+- Hipótesis: Tiger sin Quartz Extreme compone en software desde las copias de las ventanas en RAM y escribe en el fb con la CPU; el blitter GA de copia pantalla→pantalla casi no se usa. Si además lee el destino (sombras, transparencias, menús translúcidos), cada lectura del fb sin caché cuesta a ~18 MB/s.
+
+## 14.5 Las tres opciones (a investigar cuál es mejor)
+
+1. **Instrumentar el plugin:** registrar cada llamada (qué `GetBlitter` pide Quartz, cuántos `Synchronize`/`WaitComplete`/`Flush`, con qué rectángulos). Barato; hace falta cerrar sesión y que el humano use el escritorio.
+2. **Blitter memoria→pantalla (`kIOBlitSourceMemory`)**, opcional en IOGraphicsLib y hoy rechazado. Si Quartz lo usara para subir las ventanas, la GPU podría hacer esa subida. Complicación: la fuente es memoria del WindowServer → el kernel tendría que fijarla y traducirla a físicas (`IOMemoryDescriptor::withAddress(task)` + `prepare()`), con coste por llamada.
+3. **Mapear el framebuffer con caché write-through** para la CPU: las lecturas irían a caché y las escrituras seguirían llegando a la memoria que lee la pantalla. Es la que más promete, porque no depende de que Quartz llame a la GPU. Datos ya localizados:
+   - OpenBIOS `arch/ppc/wii/ofmem.c`, `ofmem_arch_default_translation_mode()`: en Cafe, todo lo ≥ `CAFE_GFX_BASE` (`0x8F000000`) va con modo `0x6a` = WIMG con **I** (sin caché) y **G** (guardado).
+   - OpenBIOS `arch/ppc/wii/macosx/xnu.c`, `xnu_patch_io_bats()`: parchea en XNU el **BAT de vídeo** (DBAT3) y evita que se llene DBAT2. Hay que averiguar qué WIMG pone XNU en ese BAT para el fb.
+   - IOGraphics de la época de Tiger (`IOFramebuffer.cpp`): en PPC, `kIOFBMapCacheMode = kIOMapInhibitCache` (en i386, `kIOMapWriteCombineCache`), y así mapea `vramMap` (el de la consola). [NO VERIFICADO cómo se mapea el fb que recibe el WindowServer por `IOFramebufferUserClient::clientMemoryForType`]
+   - Riesgos a estudiar: (a) si la GPU escribe en el fb (CP_DMA del plugin), la CPU vería líneas de caché obsoletas → invalidar (`dcbi`/`dcbf`) los rangos tocados tras cada blit, o no mezclar las dos cosas; (b) ¿Espresso (750CL modificado) implementa bien write-through (W=1, I=0) en MEM2 con el MEM de Latte? (c) ¿el BAT de XNU manda sobre el mapeo de páginas del WindowServer?; (d) cualquier otro que lea el fb (cursor HW, captura de pantalla).
+
+## 14.6 Preguntas para investigar (en este orden)
+
+1. En Tiger 10.4.11 PPC **sin QE**, ¿qué operaciones del GA usa CoreGraphics/WindowServer de verdad? ¿Mueve ventanas y hace scroll con `IOFBBlitVRAMCopy` o lo compone todo en software? ¿Usa `kIOBlitSourceMemory`? (Pistas: el `ATIRage128GA.plugin` de Tiger exporta `_SetSurface`, `_LockSurface`, `_UnlockSurface`, `_SwapSurface` y `_SetDestination`, lo que sugiere superficies aparte de los blitters. VMsvga2 documentó qué pedía el WindowServer en 10.5/10.6.)
+2. ¿Qué WIMG usa XNU 8.11 PPC para el BAT de vídeo y para el mapeo del fb del WindowServer? ¿Dónde se cambia (parche de OpenBIOS, `WiiCafeFB::getApertureRange` o las opciones de `clientMemoryForType`)?
+3. ¿Hay precedente de framebuffer write-through en Mac OS X PPC (BootX, Classic, Mac mini G4…) y cuánto mejora?
+4. ¿Vale la pena doble búfer en RAM con caché + volcado por CP_DMA al fb en cada vblank? (El CP_DMA de 3,6 MB tardaría ~2 ms según lo medido.)
+
+## 14.7 Cómo probar sin riesgo (ya montado)
+
+- Los kexts de prueba se cargan en caliente desde `/tmp` (`sudo kextload`), no van en el mkext. Al reiniciar no se cargan y Tiger vuelve a su estado normal.
+- `WiiGX2Accel.kext` publica `IOCFPlugInTypes` en `WiiCafeFB` solo mientras está cargado. El plugin está en `/System/Library/Extensions/WiiGX2GA.plugin`, y su `Probe` falla si el kext no está.
+- Pruebas sin WindowServer: `gatest` (carga el bundle con CFPlugIn) e `iopstest` (pasa por `IOPSAllocateBlitEngine`). `gx2ctl info` muestra el contador de envíos a la GPU.
+- Ver la pantalla desde el Mac: `ssh wiiu 'screencapture -x /tmp/c.png'` + scp.
+- Cualquier cambio en OpenBIOS o en el mapeo del fb implica reiniciar y que el humano relance Wiintosh desde Aroma.
+
+---
+
+# PARTE 15 — Respuestas a 14.6 con el código fuente de Tiger, y por dónde seguir
+
+> Fuentes leídas (código de Apple publicado en `github.com/apple-oss-distributions`):
+> **xnu-792.24.17** (el kernel exacto de la Wii U: Darwin 8.11.0), **IOGraphics-193.2.2**
+> (familia gráfica de 10.4.x) e **IOKitUser-277.8** (`graphics.subproj`: IOGraphicsLib e
+> IOAccelSurfaceControl). Números de línea de esas versiones. Lo que sigue es análisis de
+> código; lo marcado [NO VERIFICADO] debe confirmarse en la consola.
+
+## 15.1 Respuesta a 14.6.1: por qué el WindowServer no usa el plugin — **faltan las superficies CGS**
+
+`IOPSAllocateBlitEngine` (IOKitUser-277.8, `IOGraphicsLib.c` ~3477–3540) pide **cinco** blitters, no tres:
+
+| Puntero | `GetBlitter(type, source)` | Obligatorio | Para qué |
+|---|---|---|---|
+| `copyProc` | `CopyRects \| CopyOperation`, `SourceDefault` | sí (si falla, no hay motor) | `IOFBBlitVRAMCopy` / `IOPSBlitCopy` (pantalla→pantalla) |
+| `fillProc` | `Rects \| CopyOperation`, `SourceSolid` | sí | `IOPSBlitFill` / `IOPSBlitInvert` |
+| **`copyRegionProc`** | **`CopyRegion \| OperationType0`, `SourceFramebuffer`** | no (si falla → 0) | **`IOFBBlitSurfaceCopy`** y **`IOFBBlitSurfaceSurfaceCopy`** |
+| `memCopyProc` | `CopyRects \| CopyOperation`, `SourceMemory` | no | `IOFBMemoryCopy` (fuente = memoria del framebuffer por `byteOffset`, `memory.ref = 0`) |
+
+Las funciones clave son:
+- `IOFBBlitSurfaceSurfaceCopy(blitterRef, options, sourceSurfaceID, destSurfaceID, region, x, y)`: **copia una superficie CGS a otra o al framebuffer** (`destSurfaceID == 0` → `SetDestination(kIOBlitFramebufferDestination)`), con `kIOBlitTypeCopyRegion` y fuente `kIOBlitSourceCGSSurface` (el `sourceSurfaceID` va en el último parámetro del blitter).
+- `IOFBBlitSurfaceCopy(...)`: framebuffer → superficie (`AllocateSurface(kIOBlitHasCGSSurface, &dest, surfaceID)` + `SetDestination(kIOBlitSurfaceDestination)`).
+
+Una "superficie CGS" es el **backing store de una ventana alojado en memoria del acelerador**, creado por el WindowServer con `IOAccelCreateSurface()` (IOKitUser `IOAccelSurfaceControl.c`): abre el **acelerador** (`IOServiceOpen(accelerator, kIOAccelSurfaceClientType)`), le da el id de ventana y profundidad (`kIOAccelSurfaceSetIDMode`), su forma (`kIOAccelSurfaceSetShape…`) y la bloquea para escribir (`kIOAccelSurfaceWriteLock` → `IOAccelSurfaceInformation` con `address[]`, `rowBytes`, …: **la CPU dibuja directamente en ella**). Luego el flush de la ventana a pantalla es un blit región→framebuffer que hace la GPU.
+
+**Cómo encuentra el acelerador** (`IOAccelFindAccelerator`, `IOAccelSurfaceControl.c` 30–97): lee la propiedad **`IOAccelTypes`** del framebuffer (una **ruta del registro** en texto), obtiene ese servicio con `IORegistryEntryFromPath`, exige que sea subclase de **`IOAccelerator`** y lee **`IOAccelIndex`** (índice de framebuffer). En la Wii U, `ioreg` mostró `IOAccelerator = 0` y `WiiCafeFB` sin `IOAccelTypes` → **el WindowServer ni siquiera intenta superficies** y compone todo en RAM con la CPU, escribiendo al fb. Eso explica 14.4: el contador no se movió porque solo se pediría `copyProc` en casos raros.
+
+Esto cuadra con la pista del `ATIRage128GA.plugin` (Rage 128 no tiene QE, pero exporta `SetSurface/LockSurface/UnlockSurface/SwapSurface`): **en 10.2–10.4 sin QE, la aceleración 2D real es "ventanas en superficies del acelerador + blits región a pantalla"**, no el blitter pantalla→pantalla.
+
+**Conclusión:** la opción que falta en 14.5 es la **4ª y la buena**:
+> **Opción 4 — Implementar `IOAccelerator` + `IOAccelSurface` (kernel) + `copyRegionProc` y `AllocateSurface/FreeSurface/SetDestination` en el plugin.**
+
+Encaja especialmente bien en la Wii U porque la "VRAM" es la misma DDR3 (MEM2): una superficie puede ser simplemente memoria del kernel física/contigua (o por páginas) que la CPU del WindowServer mapea **con caché** y la GPU copia al fb por CP_DMA. Ganancias esperadas: la composición deja de leer el fb sin caché (18 MB/s) y el volcado de cada ventana a pantalla lo hace la GPU (×28 medido).
+
+### Qué implementar (esquema, verificar contra las cabeceras de la Wii U)
+Kernel (`WiiGX2Accel.kext`):
+1. Clase `WiiGX2Accelerator : IOAccelerator` (cabecera `IOAccelerator.h` está en Kernel.framework de la Wii U).
+2. En `WiiCafeFB` (o desde el accelerator al arrancar): `setProperty(kIOAccelTypesKey /*"IOAccelTypes"*/, <ruta IOService del accelerator>)` y `setProperty(kIOAccelIndexKey /*"IOAccelIndex"*/, 0)`. Obtener la ruta con `getPath(buf, &len, gIOServicePlane)`.
+3. `newUserClient(type == kIOAccelSurfaceClientType /*0*/)` → `WiiGX2SurfaceClient : IOUserClient` con los métodos de `enum eIOAccelSurfaceMethods` (`IOAccelSurfaceConnect.h`), **en ese orden exacto**:
+   `ReadLockOptions, ReadUnlockOptions, GetState, WriteLockOptions, WriteUnlockOptions, Read, SetShapeBacking, SetIDMode, SetScale, SetShape, Flush, QueryLock, ReadLock, ReadUnlock, WriteLock, WriteUnlock, Control, SetShapeBackingAndLength` (confirmar índices y tipos scalar/struct en `IOAccelSurfaceControl.c`, que es quien los llama; recordar la particularidad de `structureI_structureO` en xnu-792 de 14.2).
+   - `SetIDMode(wid, modebits)`: guardar id de ventana y formato (`kIOAccelSurfaceModeColorDepth8888`/`1555`).
+   - `SetShape(options, IOAccelDeviceRegion)`: tamaño y posición en pantalla; (re)asignar la memoria de la superficie (`IOBufferMemoryDescriptor`, fila alineada a 32 bytes).
+   - `WriteLock/ReadLock`: mapear la superficie en la tarea (`createMappingInTask`) y devolver `IOAccelSurfaceInformation` (`address[0]`, `rowBytes`, `width`, `height`, `pixelFormat`).
+   - `WriteUnlock`: **hacer `dcbst` (flush) del rango escrito** para que la GPU lea datos correctos (la superficie está mapeada copyback en el WindowServer).
+   - `Flush(options, framebufferMask)` (`IOAccelFlushSurfaceOnFramebuffers`): copiar la región visible de la superficie al fb con CP_DMA (+ fence). Es el camino de "flush de ventana".
+   - `GetState`: `kIOAccelSurfaceStateIdleBit` cuando no hay DMA pendiente.
+4. Mantener una tabla `surfaceID → superficie` para que el plugin (`AllocateSurface(kIOBlitHasCGSSurface, …, surfaceID)`) y `copyRegionProc` con `kIOBlitSourceCGSSurface` resuelvan la superficie origen.
+
+Plugin (`WiiGX2GA.plugin`):
+- `GetBlitter(CopyRegion|OperationType0, SourceFramebuffer)` y aceptar `SourceCGSSurface` en la llamada (`source` = surfaceID).
+- `AllocateSurface/FreeSurface/SetDestination(kIOBlitSurfaceDestination)` que llamen al kext.
+- `IOBlitCopyRegion`: `region` (lista de rectángulos `IOAccelBounds`, int16) + `deltaX/deltaY`.
+
+Precedentes/ayuda: **VMsvga2** implementó exactamente estas clases (`VMsvga2Accel`, `VMsvga2Surface`, cliente de superficies y GA) en 10.5/10.6 x86; la interfaz de 10.4 es la misma familia de cabeceras (comparar selectores). Es la mejor referencia de código para esta fase.
+
+Riesgos: el WindowServer confiará en las superficies para **todas** las ventanas → un fallo = escritorio roto (probar con `killall loginwindow`; tener SSH para descargar el kext). Memoria: cada ventana a 32 bpp; limitar el total y devolver error (el WindowServer vuelve a RAM normal si `IOAccelCreateSurface` falla) [NO VERIFICADO el fallback, comprobar].
+
+## 15.2 Respuesta a 14.6.2: WIMG del fb — confirmado en el código
+
+1. **Kernel/consola:** `IOFramebuffer.cpp` (IOGraphics-193.2.2, l.63–65 y 3924): `vramMap = fbRange->map(kIOFBMapCacheMode)`, con `kIOFBMapCacheMode = kIOMapInhibitCache` en PPC.
+2. **BAT de vídeo:** `osfmk/ppc/bat_init.c` (`PEMapSegment`): BAT de 256 MB con `wimg = PTE_WIMG_IO` (I+G), **`vs = 1, vp = 0` → solo modo supervisor**. **No afecta al WindowServer** (modo usuario usa la tabla de páginas). Responde 14.5‑3(c): el BAT no manda sobre el mapeo del WindowServer.
+3. **WindowServer:** `IOFramebufferUserClient::clientMemoryForType` (l.102–140) devuelve `userAccessRanges[type]` (= `getApertureRange(kIOFBSystemAperture)`) y **no toca `*flags`**. `IOUserClient::mapClientMemory` (xnu, `IOUserClient.cpp` ~905) usa las opciones de usuario (`mapFlags & kIOMapUserOptionsMask`) → el WindowServer mapea con `kIOMapDefaultCache`.
+4. **Default cache en PPC:** `IODefaultCacheBits(pa)` (xnu `osfmk/device/iokit_rpc.c` l.395): si la página física **tiene `phys_entry`** (está en la RAM del kernel) usa sus atributos; si no, **`VM_WIMG_IO`** (sin caché + guardado). Como `0x8F000000` está fuera de `PhysicalDRAM` (14.2) → **I+G**. Eso explica los 18 MB/s de lectura.
+5. `IOMemoryDescriptor::doMap` (xnu `IOMemoryDescriptor.cpp` ~1790) sí respeta `kIOMapWriteThruCache` → `DEVICE_PAGER_WRITE_THROUGH | COHERENT | GUARDED` (W=1, I=0, M=1, G=1).
+
+**Dónde cambiarlo sin tocar IOGraphics ni OpenBIOS:** en `WiiCafeFB::getApertureRange()` devolver, en vez del `IODeviceMemory`, **una subclase propia de `IOGeneralMemoryDescriptor`** (p. ej. `WiiWTMemoryDescriptor`) que sobrescriba el método virtual `map(task_t, IOVirtualAddress, IOOptionBits options, IOByteCount offset, IOByteCount length)` y, **solo si** `(options & kIOMapCacheMask) == kIOMapDefaultCache`, añada `kIOMapWriteThruCache`. El `vramMap` del kernel pide `kIOMapInhibitCache` explícito y seguirá sin caché (consola/panic seguros). Verificar en la cabecera de 10.4 que `map(...)` es virtual y su firma exacta [NO VERIFICADO la firma en `Kernel.framework/Headers/IOKit/IOMemoryDescriptor.h`].
+
+Precauciones:
+- **Alias WIMG:** la misma página física quedará I+G en el kernel y W en el WindowServer. La arquitectura PPC lo considera indefinido; en la práctica, solo es problema si **otro** escribe el fb mientras la CPU del WindowServer tiene líneas cacheadas: consola del kernel (solo en panic), cursor por software (no se usa: hay cursor HW) y **la GPU**. Tras cada blit de la GPU sobre el fb, el plugin (que corre dentro del WindowServer y tiene el mismo mapeo) debe hacer **`dcbf` en modo usuario** sobre las líneas del rectángulo destino (en PPC `dcbf`/`dcbst` están permitidos en modo usuario; `dcbi` no).
+- `screencapture` y demás lectores pasan por el WindowServer (mismo mapeo) → coherentes.
+- Espresso/750CL soporta W=1 en páginas normales de DRAM (MEM2 es DDR3 real); no hay razón de hardware para que falle [NO VERIFICADO en consola].
+- Coste de escrituras: con W=1 las escrituras siguen yendo a memoria (similar a hoy, ~317 MB/s), las lecturas pasan a caché L1/L2.
+
+**Experimento mínimo (recomendado como siguiente paso, ~1 día):** implementar solo `WiiWTMemoryDescriptor`, reiniciar con ese `WiiGraphics`, y medir con la misma prueba de 14.3 hecha **desde un proceso de usuario** que mapee el fb por `IOConnectMapMemory(kIOFBSystemAperture)` (lectura de 256 KB) + la sensación al mover ventanas. Si la lectura pasa de ~18 MB/s a cientos de MB/s y no hay artefactos, es la mejora más barata.
+
+## 15.3 Respuesta a 14.6.3: precedentes
+- Macs PPC reales: el fb está en VRAM PCI/AGP y siempre se mapea sin caché; Apple no hizo write-through porque la VRAM no es memoria del sistema. No hay precedente directo en Mac OS X.
+- **NetBSD Wii U** (`wiiufb.c`): mapea el fb para las aplicaciones (X11/wsdisplay mmap) con `BUS_SPACE_MAP_LINEAR | BUS_DMA_PREFETCHABLE` (es decir, **con caché/prefetch**, no I+G), y en el kernel usa `mapiodev(..., prefetchable=true)`. El comentario de `wiiufb.c` (l.598–612) avisa: el fb temprano va cacheable por el BAT y *"no hagáis flush del fb entero cada vez, será muy lento"*. Es el precedente más cercano: **misma consola, fb con caché**. [NO VERIFICADO si NetBSD PPC traduce PREFETCHABLE a write-through o a copyback; mirar `sys/arch/powerpc/oea/pmap.c` y `bus_space.c`]
+- Linux en Wii U (linux-wiiu, `simplefb`) mapea el fb como memoria normal del sistema para fbdev [NO VERIFICADO].
+
+## 15.4 Respuesta a 14.6.4: doble búfer en RAM + volcado por CP_DMA
+Viable pero **peor que 15.1/15.2**:
+- Volcar 3,6 MB por frame a 60 Hz = 216 MB/s de ancho de banda continuo (DDR3 lo aguanta) y ~2 ms de CP por frame, **aunque nada cambie** (IOGraphics de 10.4 no pasa zonas dañadas al driver).
+- Si el búfer en RAM es copyback, la CPU tendría que hacer `dcbst` de 3,6 MB por frame (~115 000 líneas) → caro. Con write-through no hace falta flush, pero entonces es lo mismo que 15.2 más una copia extra.
+- Solo compensa para **tearing** (page flip). Aplazar hasta tener VBL (15.5).
+
+## 15.5 Otras palancas encontradas
+1. **`GetBeamPosition` y VBL:** `IOFBBeamPosition` llama `GetBeamPosition` del plugin; el WindowServer lo usa para *beam sync*. Implementarlo leyendo `D1CRTC_STATUS_POSITION` (`0x60A0`) es trivial. Y dar a `WiiCafeFB` interrupción de VBL real (`registerForInterruptType(kIOFBVBLInterruptType)` / semáforo de `IOFramebuffer`) usando la **IRQ 23** del PI + `DxMODE_INT_MASK` bit 0 permitiría que el WindowServer sincronice en vez de sondear. Probar también desactivar beam sync en **Quartz Debug** para medir su efecto.
+2. **Herramientas de medida ya instaladas (Xcode 2.4):**
+   - `/Developer/Applications/Performance Tools/Quartz Debug.app`: "Flash screen updates", "Frame meter", desactivar beam sync. Mostrará qué redibuja el WindowServer y a cuántos FPS.
+   - `sample WindowServer 10 -file /tmp/ws.txt` mientras el humano arrastra una ventana: pila de llamadas con tiempos → dirá si el tiempo va en leer el fb (funciones de blend/composición con destino en el fb) o en otra cosa. **Hacer esto primero** (coste cero).
+   - Shark/CHUD (si está instalado) con el perfil de tiempo del sistema.
+3. **SMP** (Parte 12.1): el WindowServer compone en software con 1 núcleo de 3. Portar el arranque de núcleos de NetBSD daría la mayor mejora general, pero es un proyecto de plataforma aparte (kernel `WiiCPU`/`WiiPE`), a proponer a Goldfish64.
+4. **Estado "ocupado" tras CP_DMA (14.2):** `CP_STAT = 0x80100042` parece "CP_DMA/ME ocupado" residual. Hipótesis a probar: faltaba un `WAIT_UNTIL(WAIT_CP_DMA_IDLE)` + `EVENT_WRITE(CACHE_FLUSH_AND_INV)` o `SURFACE_SYNC` tras la última fila, o el bit `CP_SYNC` solo en el último paquete deja el PFP esperando; comparar con `r600_copy_cpdma()` de Linux (`r600.c`), que emite `WAIT_UNTIL` antes del bucle y `SURFACE_SYNC` + `EVENT_WRITE_EOP` después [NO VERIFICADO].
+
+## 15.6 Plan recomendado (orden, coste, riesgo)
+
+| # | Tarea | Coste | Riesgo | Qué decide |
+|---|---|---|---|---|
+| 1 | `sample WindowServer` + Quartz Debug mientras se arrastran ventanas | minutos | ninguno | Dónde se va el tiempo (¿lecturas del fb?) |
+| 2 | Instrumentar el plugin (opción 1 de 14.5): registrar `GetBlitter` pedidos y llamadas | horas | ninguno | Confirmar que pide `copyRegionProc`/`memCopyProc` y los rechazamos |
+| 3 | `WiiWTMemoryDescriptor` en `getApertureRange` (15.2) | ~1 día | bajo (reiniciar para volver) | Si W=1 elimina el cuello de 18 MB/s |
+| 4 | `GetBeamPosition` + VBL por IRQ 23 (15.5.1) | 1–2 días | bajo | Beam sync sin sondeo |
+| 5 | **Superficies CGS: `IOAccelerator` + `IOAccelSurface` + `copyRegionProc`** (15.1) | semanas | medio (escritorio) | La aceleración 2D "de verdad" de Tiger sin QE |
+| 6 | SMP (NetBSD) — proyecto aparte | semanas | alto | Rendimiento general |
+
+**Recomendación:** hacer 1 → 2 → 3 ya (baratos y dan datos); si 1–2 confirman que Tiger usaría superficies, invertir en 5, usando VMsvga2 como referencia de código y las cabeceras `IOAccelSurfaceConnect.h`/`IOAccelTypes.h` de la propia Wii U.
