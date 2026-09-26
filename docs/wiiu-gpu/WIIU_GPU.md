@@ -1191,3 +1191,48 @@ ssh wiiu 'sysctl hw.ncpu hw.memsize hw.cpufrequency; nvram boot-args 2>/dev/null
 ```
 - `hw.ncpu` confirma si Wiintosh usa 1 o 3 núcleos de Espresso.
 - `hw.memsize` indica cuánta RAM usa Mac OS X (relevante para reservar zonas de MEM2: ring, log persistente).
+
+---
+
+# PARTE 8 — Análisis de la tercera salida (2026-09-26)
+
+## 8.1 Disco
+| Dispositivo | Qué es | Nota |
+|---|---|---|
+| `disk0s2` | FAT32 953 MB | **Partición BOOT** (OpenBIOS, mkext, loader). No montada: `sudo diskutil mount disk0s2` |
+| `disk0s4` | Hackintosh HD, 25 GB, 17 GB libres | Espacio de sobra para Xcode y compilar |
+| `disk0s6` | Mac OS X Install DVD, 2.9 GB | Instalador; se puede borrar más adelante |
+| `disk1s3` | "Xcode Tools", 963 MB | **Imagen de disco montada** (Apple_Driver_ATAPI = imagen de CD), no el DVD de Tiger |
+
+## 8.2 Xcode ya instalado (según `system.log`)
+Entre 19:35 y 21:44 se ejecutó con sudo `installer` de: `XcodeTools.mpkg`, `DevToolsSystem`, `DeveloperToolsCLI`, `DevSDK`, **`MacOSX10.4.Universal.pkg`**, **`gcc4.0.pkg`**, `X11SDK`, `BSDSDK`, `OpenGLSDK`, `DeveloperTools`, `InterfaceBuilderCLI`, y extracción manual con `pax` en `/Developer`.
+- La presencia de `MacOSX10.4.Universal.pkg` indica Xcode **2.2 o posterior** (probablemente 2.5). Verificar:
+  ```bash
+  ssh wiiu 'xcodebuild -version; gcc-4.0 --version; ls /Developer/SDKs; ls /System/Library/Frameworks/Kernel.framework/Headers/IOKit/graphics'
+  ```
+- Hay también una carpeta `~/darwine/qemu-0.9.0` (y un `X11User.pkg`): restos de otro experimento; no afectan.
+- `/etc/sudoers` ya fue modificado (se añadió `/etc/sudoers.d-wiiu`). Revisar con `ssh wiiu 'sudo -l'` que las reglas sean las mínimas (Parte 3: solo el script `wiiu-kext`).
+
+## 8.3 Sistema
+- `hw.ncpu: 1` → Wiintosh usa **un solo núcleo** de Espresso (los otros dos, apagados). No hay SMP: todo el trabajo de CPU compite con el WindowServer, lo que hace aún más valiosa la aceleración 2D.
+- `hw.memsize: 2147483648` → **2 GB** visibles para Mac OS X.
+  - Pero el nodo `memory@0` declara `reg = 0x00000000 / 0x02000000` (32 MB) y `available = {0x4000–0x7FC000, 0x01000000 + 0x01000000}`: OpenBIOS describe solo MEM1; la RAM de MEM2 la añade WiiPE (`"Platform Memory Ranges" = (0, 2^64-1)`).
+  - **Consecuencia:** los framebuffers en `0x8F000000`/`0x8FE00000` están **dentro** de los 2 GB que usa el kernel si MEM2 empieza en `0x10000000` (0x10000000 + 2 GB = 0x90000000). Hay que confirmar en `WiiPE` / `WiiPlatform` cómo se reservan esas zonas (y la región "GFX memory" `0x7E000000` que menciona `ofmem.c`) antes de reservar más memoria para anillos o logs. **[NO VERIFICADO — revisar `WiiPlatform/src/PE/WiiPE*.cpp`]**
+- `chosen/bootargs` vacío; `bootpath = /sdhc@d070000/disk@0:4,\\:tbxi`.
+- `memory-map`: kernel `__TEXT` en `0xE000` (0x353000), `__DATA` `0x361000`, BootArgs `0xA46000`, PRELINK vacío.
+- Clases activas relevantes: `WiiCafeFB`=1, `IOFramebufferUserClient`=1, `IODisplayConnect`=1, `AppleDisplay`=1, **`IOAccelerationUserClient`=1 con `IOAccelerator`=0** (el WindowServer abre un cliente de aceleración genérico aunque no haya acelerador; al añadir el nuestro habrá que ver qué pide), `AppleUSBCDC`/`AppleUSBCDCECMControl`/`AppleUSBCDCECMData`=1 (confirma la red CDC‑ECM nativa), `LatteInterruptController`=1, `WiiIPC`=1, `WiiFlipperFB`=0.
+
+## 8.4 Por qué falla `ioreg`
+El error aparece siempre al llegar a `options` (`IODTNVRAM`): su serialización falla y `ioreg` aborta. Además `-n gx2` **sin `-r`** imprime el árbol entero. Usar siempre `-r` (solo el subárbol que coincide):
+```bash
+ssh wiiu 'ioreg -p IODeviceTree -r -n gx2 -l -w0'     # nodo OpenBIOS: reg, interrupts, AAPL,vram-memory
+ssh wiiu 'ioreg -r -c WiiCafeFB -l -w0'               # framebuffer y sus hijos (IODisplayConnect, AppleDisplay)
+ssh wiiu 'ioreg -r -c IOAccelerationUserClient -l -w0; ioreg -r -c LatteInterruptController -l -w0'
+ssh wiiu 'ioreg -p IODeviceTree -r -n "interrupt-controller@0c000000" -l -w0'
+```
+
+## 8.5 Datos que aún faltan (pedir al humano)
+1. Salida de los `ioreg -r` de 8.4 (sobre todo `reg` e `interrupts` de `gx2`).
+2. `xcodebuild -version`, `ls /Developer/SDKs`, cabeceras de `Kernel.framework/.../graphics`.
+3. `sudo -l` (reglas sudo actuales).
+4. `grep -i -E "WiiCafe|fb:|gx2" /var/log/system.log` tras un arranque con `setenv boot-args "-v wiidebug"` **[NO VERIFICADO el nombre del boot-arg de depuración; ver `WiiCheckDebugArgs()` en `include/WiiCommon.hpp`]**.
