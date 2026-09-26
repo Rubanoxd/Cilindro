@@ -19,8 +19,10 @@
 > - **Parte 18** — El WindowServer pide superficies (experimento IOAccelTypes ✅).
 > - **Parte 19** — Tabla de métodos exacta y diseño con backing en RAM.
 > - **Parte 20** — ✅ Superficies CGS funcionando (el WindowServer compone por la GPU).
-> - **Parte 21** — Qué más delegar, plan de SMP, cómo hacerlo permanente y **plan actual (21.4)**.
-> - Si algo se contradice, vale la parte **más reciente** (21 > 20 > 19 > …).
+> - **Parte 21** — Qué más delegar, plan de SMP, cómo hacerlo permanente.
+> - **Parte 22** — ✅ Instalación permanente verificada, Read, GetBeamPosition.
+> - **Parte 23** — MEM1 para la GPU, vblank, **siguiente: PR a upstream y luego SMP**.
+> - Si algo se contradice, vale la parte **más reciente** (23 > 22 > 21 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -37,14 +39,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 21.4** (permanente seguro → Read → VBL → 16 bpp → SMP → PR a upstream).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: Parte 23** (prueba de MEM1 → PR a Goldfish64 → SMP núcleo 1; vblank solo si hay tearing).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -1994,3 +1996,55 @@ Orden recomendado:
 | 4 | Probar superficie 16 bpp | horas | bajo |
 | 5 | **SMP** (21.2), empezando por el núcleo 1 | 1–3 semanas | alto |
 | 6 | Proponer a Goldfish64 (PR a `Wiintosh/osx-drivers`) | — | — |
+
+---
+
+# PARTE 22 — Plan 21.4, pasos 1–3 (2026-09-27), resumen
+- ✅ **Permanente:** `WiiGX2Accel.kext` + `WiiGX2GA.plugin` en `/System/Library/Extensions`, sin `OSBundleRequired`, con boot-args `-nogx2`/`-gx2off`. Tras reinicios reales el WindowServer compone por la GPU desde el primer momento (187 flushes/50 s, 0 timeouts). El CP se detiene al apagar/reiniciar vía `registerPrioritySleepWakeInterest` [NO VERIFICADO que se ejecute].
+- **Trampas:**
+  - Al arrancar, `kIOMemoryPhysicallyContiguous` devuelve **MEM1** (p. ej. `0x00844000`), y el backing no contiguo también puede tener páginas en MEM1. Hoy esos tramos los copia la CPU.
+  - `kextload -n -t` da por bueno un kext con símbolos sin resolver: `copyout` es KPI, así que `Read` usa `IOMemoryDescriptor::withAddress(task)`.
+- `Read` implementado y verificado. Control/SetScale no los llama el WindowServer. `GetBeamPosition` = `D1CRTC_STATUS_POSITION & 0x1FFF`.
+
+---
+
+# PARTE 23 — Respuestas a 22.5
+
+## 23.1 ¿La GPU accede a MEM1 en la dirección física 0?
+**Muy probablemente sí, a la misma dirección física que la CPU.**
+- MEM1 (32 MB de eDRAM) está **dentro** de Latte, junto a la GPU, y es donde Cafe OS pone los render targets de GX2 (Copetti: "32 MB de EDRAM (MEM1) para operaciones rápidas: render targets…").
+- GX2/TCL le pasa a la GPU **direcciones físicas** obtenidas con `OSEffectiveToPhysical` (decaf‑emu `tcl_ring.cpp`), y MEM1 está en la física `0x00000000–0x01FFFFFF` (NetBSD `wiiu.h`: `WIIU_MEM1_BASE 0`). Es decir, la GPU usa las mismas direcciones que la CPU también para MEM1.
+- [NO VERIFICADO en hardware] **Prueba barata**, con `gx2ctl` o la sonda:
+  1. Reservar una página de MEM1 (las que el kext ya retiene).
+  2. Llenarla con un patrón por CPU + `flushDataCache`.
+  3. CP_DMA MEM1 → una zona de prueba en MEM2 y comparar.
+  4. Luego al revés (MEM2 → MEM1), invalidar la caché (`dcbf`) y leer por CPU.
+  5. Si coincide en los dos sentidos, **quitar el rechazo de MEM1 y la ruta por CPU**.
+- Precaución: la eDRAM puede tener más latencia o restricciones de alineación para el CP_DMA que la DDR3. Probar tamaños y alineaciones de 4 bytes, 32 bytes y página.
+- Si fallara: pedir el backing con `IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, opts, size, mask)` o la variante de 10.4 disponible con una máscara que **excluya < 0x10000000**. Si no existe en 10.4, conservar el enfoque de reintentos.
+
+## 23.2 ¿Flush en vblank?
+**No ahora.**
+- Nadie ha visto tearing, el flush de una zona típica tarda < 1 ms y el WindowServer ya marca `FrameSync` (0x8) sin que se note nada.
+- Valor real de la IRQ 23: menos CPU sondeando y permitir *beam sync*. Es poca ganancia para el riesgo de tocar interrupciones.
+- Dejarlo como tarea menor y **probarlo solo si aparece tearing** (p. ej. al hacer scroll rápido en Safari o con vídeo).
+
+## 23.3 ¿SMP o PR primero? → **PR primero, SMP después.**
+1. **PR a Goldfish64** (`Wiintosh/osx-drivers`), porque:
+   - Lo que hay está verificado y es de bajo riesgo: el CP, las superficies CGS, 0 timeouts y reinicios reales.
+   - Un PR pequeño se revisa mejor que uno enorme con SMP dentro.
+   - SMP toca `WiiPlatform` y OpenBIOS, que son del autor: conviene hablarlo antes.
+   - Antes del PR hay que cerrar la **duda de MEM1** (23.1), para no subir la ruta de reintentos si sobra.
+
+   Contenido sugerido (varios PRs o commits separados):
+   - (a) `WiiGX2Accel` (CP/anillo/fence, IOAccelerator, cliente de superficies) + `WiiGX2GA.plugin`, **en un kext o `PlugIns` aparte**, desactivable con `-nogx2`, sin tocar `WiiCafeFB` salvo lo mínimo (las propiedades se publican desde el kext).
+   - (b) Herramientas: `gx2ctl` y la sonda, en `tools/`.
+   - (c) Documentación: resumen técnico (registros verificados, microcódigo de Nintendo, xnu‑792 y sus convenciones de user client, estructura de 68 bytes, trampas de Tiger). **Sin** volcados de microcódigo ni nada de Nintendo.
+   - Build: el Makefile debe seguir compilando con el toolchain del CI oficial (Darling + gcc 4.2) además de con gcc‑4.0 en la Wii U. Probar ambos o avisar en el PR.
+   - Licencia: BSD‑3 como el repo. Si se usó código de VMsvga2/VMQemuVGA (MIT) o de NetBSD (BSD‑2), mantener sus avisos; si solo se usó como referencia, citarlo.
+   - Mencionar en el PR la limitación de 10.4.11 PPC probada en una sola consola, y los boot-args de escape.
+2. **SMP (núcleo 1)** después, con el plan 21.2, idealmente coordinado con Goldfish64 (le puede interesar más que la GPU).
+3. Pequeños: probar 16 bpp; IRQ 23 solo si hay tearing.
+
+## 23.4 Aviso de seguridad pendiente
+`sudo` en la Wii U sigue siendo `NOPASSWD: ALL` duplicado (Parte 9.3). Ya no hace falta para el día a día (el kext se carga solo). **Reducirlo** a la regla mínima antes de seguir con SMP, que implica más reinicios y comandos root.
