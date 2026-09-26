@@ -1236,3 +1236,47 @@ ssh wiiu 'ioreg -p IODeviceTree -r -n "interrupt-controller@0c000000" -l -w0'
 2. `xcodebuild -version`, `ls /Developer/SDKs`, cabeceras de `Kernel.framework/.../graphics`.
 3. `sudo -l` (reglas sudo actuales).
 4. `grep -i -E "WiiCafe|fb:|gx2" /var/log/system.log` tras un arranque con `setenv boot-args "-v -wiifbdbg"`. **Confirmado en `include/WiiCommon.hpp`:** cada clase declara `WiiDeclareLogFunctions("xx")` y se activa con el boot-arg `-wii<xx>dbg` (WiiCafeFB usa `"fb"` → `-wiifbdbg`). Solo en builds con `DEBUG`; en Wii U los mensajes también se envían por IPC a Starbuck (`kWiiFuncIPCCafeLog`). Para el driver nuevo: `WiiDeclareLogFunctions("gx2")` → `-wiigx2dbg`.
+
+---
+
+# PARTE 9 — Cuarta salida (2026-09-26)
+
+## 9.1 `ioreg` de Tiger es limitado
+El `ioreg` de 10.4 **no tiene `-r`** y `-c`, `-l`, `-n` son **mutuamente excluyentes** (`usage: ioreg [-b] [-c class | -l | -n name] [-p plane] [-s] [-w width] [-x]`). `-n`/`-c` ya imprimen las propiedades solo de lo que coincide y no fallan en `options` (el fallo venía de `-l`). Comandos correctos:
+```bash
+ssh wiiu 'ioreg -p IODeviceTree -n gx2 -w0 -x'                 # reg, interrupts, AAPL,vram-memory (hex)
+ssh wiiu 'ioreg -c WiiCafeFB -w0 -x'
+ssh wiiu 'ioreg -c LatteInterruptController -w0; ioreg -c IOAccelerationUserClient -w0'
+ssh wiiu 'ioreg -p IODeviceTree -n interrupt-controller@0c000000 -w0 -x'
+```
+Si hiciera falta el árbol completo: instalar un `ioreg` más nuevo no es posible; usar `ioreg -w0 | grep -v '^ *|'` (solo la jerarquía, sin propiedades).
+
+## 9.2 Toolchain en la Wii U
+- `xcodebuild`: DevToolsCore-798.0 / DevToolsSupport-794.0 → **Xcode 2.4.x** **[versión exacta NO VERIFICADA; 2.5 sería DevToolsCore 9xx]**.
+- `gcc-4.0`: `powerpc-apple-darwin8-gcc-4.0.1 (Apple build 5370)` ✅ — basta para kexts (el repo usa gcc 4.2 en CI, pero 4.0.1 compila C++ de kext para 10.4 igual; revisar warnings).
+- `/Developer/SDKs` **no existe** → el paquete `MacOSX10.4.Universal.pkg` no terminó de instalarse o se instaló en otra ruta. Para kexts no hace falta SDK: se compila contra el sistema con las cabeceras de `Kernel.framework`. Comprobar:
+  ```bash
+  ssh wiiu 'ls /System/Library/Frameworks/Kernel.framework/Headers/IOKit/graphics; ls /Developer/Headers 2>/dev/null | head; pkgutil --pkgs 2>/dev/null | grep -i sdk; ls /Library/Receipts | grep -i -E "sdk|gcc|devtools"'
+  ```
+  Si faltan las cabeceras del kernel, usar `MacPPCKernelSDK` (copiarlo con rsync) — es lo que usa el repo (`INCLUDES := ../MacPPCKernelSDK/Headers`).
+- Prueba de compilación del repo sin cambios, en la Wii U:
+  ```bash
+  rsync -a --bwlimit=200 osx-drivers MacPPCKernelSDK wiiu:~/src/
+  ssh wiiu 'cd ~/src/osx-drivers && make OSX_VERSION=tiger DARLING_SHELL= CC=gcc-4.0 CXX=g++-4.0 LD=/usr/bin/ld AS=/usr/bin/as'
+  ```
+  El Makefile pasa `-mmacosx-version-min=10.2` y `-fapple-kext`; gcc 4.0.1 los admite. Posibles ajustes: `-mlong-branch` y `-force_cpusubtype_ALL` pueden requerir ser pasados al enlazador (`-Wl,`); corregir según errores.
+
+## 9.3 sudo: demasiado permisivo
+`sudo -l` → `(ALL) ALL` y **dos veces `(ALL) NOPASSWD: ALL`**. Cualquiera que entre por SSH (incluida la IA) es root sin contraseña.
+- Aceptable temporalmente en una máquina de pruebas aislada detrás del Redmi, pero **peligroso**: un comando equivocado puede borrar el sistema o la partición BOOT.
+- Recomendado: dejar solo
+  ```
+  rubano1421 ALL=(ALL) ALL
+  rubano1421 ALL=(root) NOPASSWD: /usr/local/sbin/wiiu-kext, /sbin/kextload, /sbin/kextunload, /usr/sbin/kextstat, /usr/sbin/diskutil, /sbin/reboot
+  ```
+  (editar con `sudo visudo`; quitar las líneas duplicadas `NOPASSWD: ALL`). Y en Claude Code (Mac), exigir confirmación para cualquier `ssh wiiu sudo`.
+
+## 9.4 Datos pendientes
+1. Salidas de 9.1.
+2. Salida del comando de cabeceras de 9.2.
+3. Resultado de la compilación de prueba de 9.2 (primer paso real).
