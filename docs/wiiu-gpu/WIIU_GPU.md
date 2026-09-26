@@ -1235,4 +1235,4 @@ ssh wiiu 'ioreg -p IODeviceTree -r -n "interrupt-controller@0c000000" -l -w0'
 1. Salida de los `ioreg -r` de 8.4 (sobre todo `reg` e `interrupts` de `gx2`).
 2. `xcodebuild -version`, `ls /Developer/SDKs`, cabeceras de `Kernel.framework/.../graphics`.
 3. `sudo -l` (reglas sudo actuales).
-4. `grep -i -E "WiiCafe|fb:|gx2" /var/log/system.log` tras un arranque con `setenv boot-args "-v wiidebug"` **[NO VERIFICADO el nombre del boot-arg de depuración; ver `WiiCheckDebugArgs()` en `include/WiiCommon.hpp`]**.
+4. `grep -i -E "WiiCafe|fb:|gx2" /var/log/system.log` tras un arranque con `setenv boot-args "-v -wiifbdbg"`. **Confirmado en `include/WiiCommon.hpp`:** cada clase declara `WiiDeclareLogFunctions("xx")` y se activa con el boot-arg `-wii<xx>dbg` (WiiCafeFB usa `"fb"` → `-wiifbdbg`). Solo en builds con `DEBUG`; en Wii U los mensajes también se envían por IPC a Starbuck (`kWiiFuncIPCCafeLog`). Para el driver nuevo: `WiiDeclareLogFunctions("gx2")` → `-wiigx2dbg`.
