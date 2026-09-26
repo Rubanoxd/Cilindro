@@ -21,8 +21,10 @@
 > - **Parte 20** — ✅ Superficies CGS funcionando (el WindowServer compone por la GPU).
 > - **Parte 21** — Qué más delegar, plan de SMP, cómo hacerlo permanente.
 > - **Parte 22** — ✅ Instalación permanente verificada, Read, GetBeamPosition.
-> - **Parte 23** — MEM1 para la GPU, vblank, **siguiente: PR a upstream y luego SMP**.
-> - Si algo se contradice, vale la parte **más reciente** (23 > 22 > 21 > …).
+> - **Parte 23** — MEM1 para la GPU, vblank, PR antes que SMP.
+> - **Parte 24** — ✅ MEM1 verificado; PR preparado.
+> - **Parte 25** — Revisión del PR, issue de SMP y **pasos para publicar**.
+> - Si algo se contradice, vale la parte **más reciente** (25 > 24 > 23 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -39,14 +41,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: Parte 23** (prueba de MEM1 → PR a Goldfish64 → SMP núcleo 1; vblank solo si hay tearing).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: Parte 25** (revisar y publicar el PR → issue de SMP → SMP núcleo 1).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -2048,3 +2050,59 @@ Orden recomendado:
 
 ## 23.4 Aviso de seguridad pendiente
 `sudo` en la Wii U sigue siendo `NOPASSWD: ALL` duplicado (Parte 9.3). Ya no hace falta para el día a día (el kext se carga solo). **Reducirlo** a la regla mínima antes de seguir con SMP, que implica más reinicios y comandos root.
+
+---
+
+# PARTE 24 — MEM1 y PR (2026-09-27), resumen
+- ✅ **La GPU accede a MEM1 en la física 0.** El autotest `gx2ctl selftest` (MEM1 `0x01212000` ↔ MEM2, CP_DMA en los dos sentidos, (4,100)/(32,1000)/(0,página)) dio 6/6 correctas. `GX2AllowMEM1 = true` por defecto; la copia por CPU dejó de crecer.
+- Flush en vblank: no se ha hecho (sin tearing).
+- **PR preparado** (rama `pr/gx2-accel` sobre upstream `main`, 3 commits):
+  - (a) WiiGX2Accel + GA + `make accel`, `-nogx2`;
+  - (b) tools (`gx2ctl`, `gatest`) y la sonda en la raíz;
+  - (c) `docs/GX2.md`.
+  Sin código copiado ni microcódigo. No probado con Darling + gcc 4.2.1 (el documento lo dice). Pendiente: permiso e identidad de autor.
+
+---
+
+# PARTE 25 — Respuestas a 24.4 (revisión del PR)
+
+## 25.1 ¿WiiGX2Probe en `tools/` o en la raíz?
+**Déjala en la raíz**, junto al resto de kexts (`WiiAudio/`, `WiiGraphics/`…): es un kext y la estructura del repo es "un kext por carpeta en la raíz" con `common/kext.mk` relativo. Adaptar `kext.mk` solo para la sonda cambia infraestructura del autor sin necesidad.
+- **No** añadirla a `KEXTS` del Makefile principal ni al mkext: que se compile con un objetivo aparte (`make probe`), igual que `make accel`.
+- Documentar en `docs/GX2.md` que es una herramienta de diagnóstico, no un driver.
+- Opcional: ofrecer en la descripción del PR quitar la sonda si el autor prefiere un PR más pequeño.
+
+## 25.2 ¿SMP en el PR o en un issue aparte?
+**Issue aparte, y después del PR.**
+- El PR debe contener solo lo verificado (GPU 2D). Mezclar un plan no implementado que toca `WiiPlatform` y OpenBIOS (del autor) complica la revisión.
+- Abre un issue en `Wiintosh/osx-drivers` (o en `Wiintosh/Wiintosh`), titulado p. ej. *"SMP on Wii U (Espresso cores 1–2): proposal"*, con:
+  1. Referencias: NetBSD `evbppc/nintendo/cpu.c`, `pic_pi.c`, `ipi_latte.c`, `oea/spr.h` (SCR = SPR 947, `WAKE(n) = 1<<(23-n)`, `IPI_PEND(n) = 1<<(20-n)`, vector `0x08100100`, trampolín HID0/4/5) y xnu‑792 `osfmk/ppc/cpu.c` (`cpu_start`, `ResetHandler`, `PE_cpu_start`, `cpu_sync_timebase`).
+  2. Los cambios propuestos en OpenBIOS (`/cpus`), `WiiCPU` (startCPU/signalCPU/ipiHandler/initCPU) y `WiiInterruptController` (por núcleo).
+  3. La pregunta al autor: ¿lo prefiere en OpenBIOS o en WiiPE? ¿Ha probado ya algo?
+- Enlazar el issue desde el PR ("follow-up: #N").
+
+## 25.3 Revisión del PR antes de publicar (lista de comprobación)
+1. **Descripción del PR**, clara y corta:
+   - qué hace (el WindowServer compone por la GPU vía superficies CGS + CP_DMA);
+   - qué no hace (ni QE ni OpenGL);
+   - resultados (0 timeouts, reinicios reales, Tiger 10.4.11, una sola consola);
+   - cómo desactivarlo (`-nogx2`, `-gx2off`, Safe Boot);
+   - toolchain probado.
+2. **Versiones de OS X:** el repo compila para 10.0–10.4. Si el kext solo está probado en 10.4 (Tiger), que `make accel` solo se construya para `tiger`, o que el Info.plist/`start()` se niegue en otras versiones. Dilo en el PR. Riesgos a revisar en código:
+   - la estructura de 68 bytes (`IOAccelSurfaceInformation`);
+   - las convenciones de user client de xnu‑792;
+   - la dependencia de `IOGraphicsFamily`.
+   Todo eso puede diferir en 10.2/10.3.
+3. **No romper el CI existente:** el CI construye todos los kexts con Darling. Si `accel` no está en `KEXTS`, el CI no se ve afectado. Confirmar que ningún archivo común (`common/kext.mk`, `include/`) cambió de forma que afecte a los demás kexts.
+4. **Estilo:** igual que el repo (cabeceras `//  Archivo.cpp` con copyright, `WIIDBGLOG/WIISYSLOG`, `WiiDeclareLogFunctions("gx2")` → boot-arg `-wiigx2dbg`, 2 espacios, nombres `kWiiGX2Reg…` como en `GX2Regs.hpp`). **Reutilizar `WiiGraphics/src/Cafe/GX2Regs.hpp`** si se definen los mismos registros, en vez de duplicarlos.
+5. **Copyright/autor:** en las cabeceras nuevas, "Copyright © 2026 <nombre del humano>". Licencia BSD‑3 como el repo (sin añadir otra). Citar las referencias en `docs/GX2.md`, no en la licencia.
+6. **Nada privado:** sin microcódigo, sin rutas de tu máquina, sin IPs (172.16.42.x), sin el usuario `rubano1421` en los scripts, ni la bitácora personal.
+7. **Commits:** mensajes en inglés, sin menciones a modelos, autor = la identidad que elija el humano.
+8. **Tamaño:** si el diff es muy grande, ofrecer separarlo (a) primero y (b)+(c) después.
+
+## 25.4 Pasos para publicar (los hace el humano o Claude con permiso)
+1. Fork de `Wiintosh/osx-drivers` a la cuenta del humano.
+2. `git remote add fork git@github.com:<usuario>/osx-drivers.git && git push fork pr/gx2-accel`.
+3. Abrir el PR contra `Wiintosh/osx-drivers:main` desde la web (o `gh pr create`).
+4. Después, abrir el issue de SMP (25.2) y enlazarlo.
+5. Seguir el PR: responder a Goldfish64 y adaptar a lo que pida.
