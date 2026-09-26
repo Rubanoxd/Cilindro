@@ -27,8 +27,10 @@
 > - **Parte 25b** — ✅ PR publicado: Wiintosh/osx-drivers#1.
 > - **Parte 26** — SMP: investigación y texto del issue (26.6).
 > - **Parte 27** — SMP paso 0: registros del núcleo 0 y MEM0.
-> - **Parte 28** — ⚠️ El controlador de CPU bloquea hasta arrancar todos los núcleos; prueba de IPI en caliente; **plan SMP revisado (28.6)**.
-> - Si algo se contradice, vale la parte **más reciente** (28 > 27 > 26 > …).
+> - **Parte 28** — ⚠️ El controlador de CPU bloquea hasta arrancar todos los núcleos; prueba de IPI en caliente.
+> - **Parte 29** — Issue #24 y prueba A (el bit 20 no se latchea).
+> - **Parte 30** — Bits de ICI según WiiUBrew (18/19/20), MEM0 = vector alto de reset, ⚠️ **errata `stwcx.` de Espresso** y **plan SMP (30.5)**.
+> - Si algo se contradice, vale la parte **más reciente** (30 > 29 > 28 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -45,14 +47,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 28.6** (pruebas A/B de IPI en caliente → WiiPlatform con -wiismp → núcleo 1).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 30.5** (prueba A' → rutina de Nintendo → recuento de stwcx. → decidir si SMP compensa).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -2359,3 +2361,101 @@ Todo lo nuevo de SMP va **detrás de un boot‑arg** (p. ej. `-wiismp`). Sin él
 | 5 | Estabilidad (`make -j2`, horas, reloj, panics) | — | — |
 | 6 | Núcleo 2 (`cpus=3`), vector 2, `INTMSK(2)` = solo bit 22 | — | alto |
 | 7 | Upstream: issue (26.6) y luego PR | — | — |
+
+---
+
+# PARTE 29 — Issue y prueba A (2026-09-27), resumen del Claude del Mac
+- Issue abierto en **Wiintosh/Wiintosh#24** (osx-drivers tiene los issues desactivados), enlazado desde el PR #1.
+- **Prueba A:**
+  - Condiciones: `INTMSK(0) = 0x01000050` (bit 20 enmascarado), interrupciones desactivadas, `SCR |= 1<<20`, `eieio; sync` y 10 µs de espera.
+  - Resultado: **SCR se lee `0x80000000` (sin el bit 20) e `INTSR(0) = 0x00010000` (sin el bit 20)**. No hubo nada que reconocer ni ninguna excepción. **El bit 20 no se latchea.**
+- Estado del núcleo 0: HID5 `0x80000000` (sin PIRE), CAR 0, SCR `0x80000000`.
+- Contenido de MEM0:
+  - `0x08100100`: `li r3,0x40; mtmsr r3; isync; b 0x08000110`.
+  - `0x08000100`: `lis r3,0x1400; ori r3,r3,0x100; mtsrr0; li r3,0; mtsrr1; rfi`.
+  - Desde `0x08000120`: código que lee el PVR, lo compara con 0x7001 y hace `mfspr/mtspr` de los SPR 1011/944/947.
+
+---
+
+# PARTE 30 — Respuestas a la Parte 29 (y un bloqueo serio para SMP)
+
+## 30.1 Por qué no se latchea el bit 20: **el bit de IPI del núcleo 0 es probablemente el 18, no el 20**
+- **WiiUBrew, *Hardware/Espresso*, tabla SCR** (numeración LSB‑0, la misma que usan sus tablas de HID4/HID5, donde el bit 31 = H4A/H5A = `0x80000000`, que coincide con tus lecturas):
+
+  | Bit | Significado |
+  |---|---|
+  | 18 | Core 0 pending ICI |
+  | 19 | Core 1 pending ICI |
+  | 20 | Core 2 pending ICI |
+  | 21 | Wake up Core 2 |
+  | 22 | Wake up Core 1 |
+  | 23 | Wake up Core 0 |
+  | 26 | RMA enabled |
+  | 27 | con 26: claves ancast de vWii |
+  | 28–31 | control de bootrom/keystore |
+
+  Los bits de wake coinciden con NetBSD (`WAKE(n) = 1<<(23−n)`) y con fail0verflow (*"core 1 scr |= 0x00400000; core 2 scr |= 0x00200000"*).
+- **Pero los bits de ICI están al revés que en NetBSD** (`IPI_PEND(n) = 1<<(20−n)` → núcleo 0 = bit 20, núcleo 2 = bit 18). Solo coinciden en el **núcleo 1 (bit 19)**.
+- Tu prueba encaja con WiiUBrew: escribiste el bit 20 ("pending del núcleo 2", núcleo dormido) y no se quedó puesto. [NO VERIFICADO: puede ser que las ICI a un núcleo dormido se descarten, o que no se admita una ICI a uno mismo.]
+- **Prueba A' (sin riesgo, igual que la A):** con `EE = 0`, para cada bit `b ∈ {18, 19, 20}`:
+  1. `SCR |= 1<<b`; `eieio; sync`; 10 µs;
+  2. leer `SCR` y `INTSR(0)`;
+  3. borrar el bit en bucle; escribir en `INTSR(0)` lo que haya aparecido;
+  4. volver a leer.
+
+  Resultado esperado si WiiUBrew acierta: **el bit 18 se queda puesto**, y quizá aparece algún bit nuevo en `INTSR(0)` (el 20 de NetBSD es el número de IRQ del PI, `MB_CPU(0) = 20`, que no tiene por qué coincidir con el bit de SCR). Apuntar **qué bit de `INTSR(0)`** se activa: ese es el que hay que desenmascarar en `INTMSK(0)` para la prueba B.
+- En el SMP real, núcleo 0 → núcleo 1 = **bit 19** en ambas convenciones. La duda solo afecta a las IPI hacia los núcleos 0 y 2.
+
+## 30.2 ¿Aplicar CAR/BCR/HID5.PIRE en caliente?
+- **Significado:** no hay documentación pública de CAR ni BCR. fail0verflow: *"CAR … BCR … bit assignments are unknown"* y *"just flipping the two boot bits in SCR is enough to get the two other cores up … although coherency will probably be broken/disabled"*. Lo más probable es que **CAR/BCR configuren la coherencia/el bus entre núcleos**, y NetBSD los fija antes de despertar núcleos (`CAR |= 0xFC100000`, `BCR = 0x08000000`) [interpretación, NO VERIFICADO].
+- **`HID5 |= PIRE`: sí, en caliente.** Solo habilita el registro PIR (id de núcleo). Lee PIR antes y después para comprobarlo.
+- **CAR y BCR: no en caliente por ahora.** Son globales, de semántica desconocida y probablemente de coherencia/caché: cambiarlos con cachés sucias y Tiger en marcha podría corromper memoria. **No hacen falta para que se latchee una ICI.** Aplicarlos solo en el camino `-wiismp`, lo antes posible en el arranque (`WiiPE::start`, o antes, desde OpenBIOS), y justo antes de despertar el núcleo 1, como NetBSD.
+- El único riesgo de probarlos en caliente es un cuelgue, que se arregla reiniciando: los SPR no son persistentes. Si hiciera falta, probar después de A'.
+
+## 30.3 Qué hay en MEM0 (de wiiu-loader `arm/system/ppc.c` y `ppc_elf.c`)
+- `ppc_elf.c` `_translate_physaddr()`: **`0xFFE00000–0xFFF1FFFF` ↔ física `0x08000000 + (addr − 0xFFE00000)`**. Por tanto:
+  - **`0x08100100` = `0xFFF00100`**, el vector de reset con `MSR[IP] = 1`. fail0verflow: *"Cores 1 and 2 boot with MSR[IP]=1, thus at the high vectors"*. Por eso NetBSD pone ahí su trampolín (`WIIU_BOOT_VECTOR`).
+  - **`0x08000100` = `0xFFE00100`**: el inicio del cuerpo *ancast* del PPC.
+- `ppc_prepare()`: el loader arranca el PPC, "compite" con la ROM, copia un **wait stub a `0x14000100`** (MEM2) y un **jump stub** (`lis/ori 0x14000100; mtsrr0; li 0; mtsrr1; rfi`) al inicio del cuerpo ancast (`0x08000100`). El núcleo 0 queda esperando en `0x14000100` hasta que el loader escribe la entrada en `0x14000000`.
+- Lo que leíste:
+  - **`0x08000100`** es el jump stub del loader.
+  - **`0x08000120` en adelante** es **el resto del código de arranque de Nintendo** (el cuerpo ancast que el loader no sobrescribió): la inicialización por núcleo de Cafe OS (PVR, HID4 = SPR 1011, HID5 = 944, SCR = 947).
+  - **`0x08100100`** (`li r3,0x40; mtmsr r3; isync; b 0xFFE00110`) es el vector de reset de los secundarios que dejó el arranque de Nintendo: pone `MSR = 0x40` (IP) y salta **al cuerpo ancast + 0x10**.
+- **Consecuencia:** si hoy despiertas el núcleo 1, entra por `0xFFF00100` y salta a `0xFFE00110`, que ahora cae **en mitad del jump stub del loader** (`mtsrr1` + `rfi` con un `SRR0` indefinido) o en el wait stub de `0x14000100` (memoria de Mac OS X) → ejecutaría basura. **Hay que escribir el trampolín en `0x08100100` antes del `WAKE`.**
+- **¿Imitar `0x08000120+`?** Sí, como referencia: es la inicialización original de Nintendo para cada núcleo. Desensambla toda la rutina (hasta el primer `rfi`/`b` fuera) y compara los valores de HID4/HID5/SCR que escribe con los del trampolín de NetBSD (`HID0 0x00110024`, `HID4 0xB1B00000`, `HID5 0xE7FDC000`). Si difieren, prioriza **los de Nintendo** para los secundarios, porque es su código de producción. Guarda el desensamblado en `docs/` (código de Nintendo: solo las instrucciones relevantes y los valores, no un volcado).
+
+## 30.4 ⚠️ Bloqueo serio para SMP: errata de `lwarx/stwcx.` en Espresso
+- **linux-wiiu `smp-patches`** (README): *"there was an errata affecting the load-exclusive and store-exclusive instructions used to implement atomics. To work around it, a cache flush needs to be inserted before each stwcx instruction — on Linux, this means patching compilers, libraries, the kernel, etc."* Parchean GCC (`-mcpu=espresso` emite `dcbst` antes de `stwcx.`) y glibc.
+- **NetBSD** hace lo mismo:
+  - `asm.h`: `POWERPC_STWCX_PRE(ra,rb)` → `dcbst ra,rb`.
+  - `lock.h`: `dcbst 0,%1` antes de cada `stwcx.`.
+  - Una variante de libc `powerpc_espresso`.
+  - `trap.c`: `fix_stwcx()`, que emula un `stwcx.` que trapea haciendo `dcbst` + `stwcx.` en el kernel.
+- **Para Tiger significa que:**
+  1. **El kernel XNU** usa `lwarx/stwcx.` en todos sus locks y atómicos (`osfmk/ppc/hw_lock.s`, `hw_vm.s`, `commpage/*`, `libkern` OSAtomic…). Con 2+ núcleos, sin `dcbst` previo, **un `stwcx.` puede tener éxito cuando no debería → locks y contadores corruptos → panics aleatorios**.
+  2. **El espacio de usuario** (libSystem, frameworks, apps) también tiene `lwarx/stwcx.`: los atómicos de la *commpage* (que el kernel puede parchear), pero también código en línea en bibliotecas que no podemos recompilar.
+- **Qué hacer antes de despertar un núcleo:**
+  - a) **Medir el alcance:**
+    ```bash
+    otool -tv /mach_kernel | grep -c 'stwcx\.'
+    otool -tv /usr/lib/libSystem.B.dylib | grep -c 'stwcx\.'
+    ```
+    y buscar en la commpage de xnu‑792 (`osfmk/ppc/commpage/*.s`: spinlocks, `compare_and_swap`, `atomic_add`). Revisar si `OSAtomic*` de libSystem en 10.4 llama a la commpage o lleva `lwarx/stwcx.` propios.
+  - b) **Parche del kernel:** sustituir cada `stwcx.` por `ba stub_k`, con `stub_k` = `dcbst rA,rB; stwcx. rS,rA,rB; b vuelta` (cr0 se conserva porque lo pone el propio `stwcx.`). Como el kernel de PPC está mapeado 1:1 en memoria baja, los stubs pueden ir en una zona reservada **por debajo de 32 MB** (alcance de `ba`). Hacerlo desde el parcheador de OpenBIOS (antes de arrancar XNU) es lo más seguro. **Esto también cubre los kexts** que ya estén cargados cuando se parchee; los kexts nuevos (Wiintosh incluido) habría que compilarlos con el `dcbst` en su código ensamblador o parchearlos al cargarse.
+  - c) **Commpage:** parchear las rutinas atómicas que XNU copia a la commpage (xnu‑792 `osfmk/ppc/commpage/`), o sus plantillas antes de que se copien.
+  - d) **Espacio de usuario sin recompilar:** no hay una solución general. Opciones:
+    1. Parchear en binario `libSystem.B.dylib` (con copia de seguridad): arriesgado.
+    2. **Aceptar el riesgo** y medirlo con una prueba de estrés: dos hilos haciendo `OSAtomicIncrement32` sobre el mismo contador con los dos núcleos activos, comparar el resultado esperado con el obtenido, y lo mismo con `pthread_mutex`.
+- **Recomendación:** antes de invertir en IPIs y trampolín, decidir si SMP compensa. Pasos: el recuento (a); si el kernel tiene decenas o centenares de sitios, el parche (b) es factible con el parcheador de OpenBIOS; y el riesgo en espacio de usuario se medirá con la prueba de estrés una vez el núcleo 1 funcione. **Avisar a Goldfish64 en el issue #24** (es un requisito de diseño para upstream).
+
+## 30.5 Plan SMP revisado (sustituye a 28.6)
+| # | Paso | Riesgo |
+|---|---|---|
+| 1 | Prueba A' (bits 18/19/20 del SCR + qué bit de `INTSR(0)` aparece) | ninguno |
+| 2 | Desensamblar la rutina de Nintendo de `0x08000120+` y comparar sus HID con NetBSD | ninguno |
+| 3 | Recuento de `stwcx.` en `mach_kernel`, libSystem y la commpage (30.4a); avisar en #24 | ninguno |
+| 4 | Prueba B (IPI al núcleo 0 por el bit correcto del PI) | bajo‑medio |
+| 5 | Diseñar el parche `dcbst`+`stwcx.` del kernel en OpenBIOS (30.4b); decidir con Goldfish64 | — |
+| 6 | `WiiPlatform` con `-wiismp` (28.4) + trampolín en `0x08100100` + CAR/BCR/HID5 al estilo NetBSD/Nintendo + `WAKE(1)` = `1<<22`, IPI al núcleo 1 = bit 19 | alto |
+| 7 | Prueba de estrés de atómicos en espacio de usuario con 2 núcleos | medio |
+| 8 | Núcleo 2 | alto |
