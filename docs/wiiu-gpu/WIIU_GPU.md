@@ -8,6 +8,10 @@
 > - **Parte 2** — Referencia técnica (registros, PM4, código).
 > - **Parte 3** — Depuración y avisos al humano.
 > - **Parte 4** — Pixel 6a con Vanilla en lugar de GamePad (cambia la fase 1: sin GamePad físico).
+> - **Parte 5** — Ejecutarlo todo desde Claude Code en el MacBook (SSH vía Redmi).
+> - **Partes 6–11** — Datos reales de la consola y su análisis.
+> - **Parte 12** — Proyectos similares (⭐ NetBSD Wii U) y qué aprovechar.
+> - **Parte 13** — Fe de erratas: **si algo se contradice, vale la Parte 13**.
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -24,7 +28,7 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee las Partes 1–11 antes de actuar. La Parte 6–11 son **datos reales** de su consola; prevalecen sobre las partes 1–5 si hay contradicción.
+1. Lee primero la **Parte 13 (fe de erratas)**, luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
@@ -35,6 +39,7 @@
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
 2. `ssh wiiu 'cat /System/Library/Frameworks/IOKit.framework/Headers/graphics/IOGraphicsInterface.h'` y guardar copia (vtable del plugin GA).
 3. `ssh wiiu 'sysctl hw.physmem hw.usermem'` (Parte 11.1).
+3b. Clonar NetBSD `sys/arch/evbppc/nintendo` + `include/wiiu.h` como referencia (Parte 12.1).
 4. Compilar `osx-drivers` **sin cambios** en la Wii U (Parte 9.2) y comparar con la release 0.5.2.
 5. Preparar la sonda de la fase 0 (Parte 2 §3) y pedir permiso para cargarla.
 
@@ -1390,3 +1395,96 @@ Está colgado de **`IODisplayWrangler`**, no de un acelerador: es el cliente gen
 
 ## 11.4 USB
 - El Redmi ("Fedora rescate") y el receptor teclado/ratón comparten `usb@d050000` (OHCI 12 Mbit/s). Mantener `rsync --bwlimit=200` y transferir en momentos sin uso interactivo.
+
+---
+
+# PARTE 12 — Proyectos similares y qué aprovechar
+
+## 12.1 NetBSD en Wii U (⭐ el más útil) — licencia BSD‑2
+Jared McNeill añadió soporte Wii U a NetBSD‑current en **enero de 2026** (anuncio: `mail-index.netbsd.org/port-powerpc/2026/01/10/msg003726.html`). Código en `github.com/NetBSD/src`, `sys/arch/evbppc/nintendo/` y `sys/arch/evbppc/include/wiiu.h`. **SMP funciona** en los 3 núcleos. Arranca con el mismo linux-loader que Wiintosh.
+
+Archivos clave:
+| Archivo | Qué enseña |
+|---|---|
+| `dev/wiiufb.c` (637 líneas) | Framebuffer TV **o** GamePad (`video=drc`), cursor HW de **64×64** ARGB premultiplicado, bloqueo de actualización del cursor, `REG_OFFSET(d, r) = d*0x800 + r` (**confirma** que D2 = D1 + 0x800, incl. cursor `0x6C00`) |
+| `include/wiiu.h` | Constantes de plataforma (abajo) |
+| `pic_pi.c` | Controlador PI por núcleo (`INTSR(n)=0x0C000078+n*8`, `INTMSK(n)=0x0C00007C+n*8`) |
+| `cpu.c`, `ipi_latte.c` | Arranque de los núcleos 1 y 2 (vector de arranque, `SCR` wake bits, `HID4/HID5`), IPIs por buzón |
+| `dev/ehci_ahb.c` | USB 2.0 (Wiintosh solo tiene OHCI 1.1) |
+| `machdep.c` | Protocolo de linux-loader (argv, apagado/reinicio por IPC) |
+
+Constantes confirmadas (`wiiu.h`):
+```c
+WIIU_MEM1_BASE 0x00000000  WIIU_MEM1_SIZE 0x02000000   /* 32 MB */
+WIIU_MEM0_BASE 0x08000000  WIIU_MEM0_SIZE 0x00300000   /* 3 MB  */
+WIIU_MEM2_BASE 0x10000000  WIIU_MEM2_SIZE 0x80000000   /* 2 GB → hasta 0x8FFFFFFF */
+WIIU_GX2_BASE  0x0c200000  WIIU_GX2_SIZE 0x80000
+WIIU_PI_IRQ_MB_CPU(n) (20 + n)      /* IPIs */
+WIIU_PI_IRQ_GPU7      23            /* ¡IRQ de la GPU en el PI! */
+LT_GPUINDADDR (Hollywood priv + 0x620), LT_GPUINDDATA (+0x624)  /* acceso indirecto a registros GPU */
+LT_GPUINDADDR_REGSPACE_GPU (3u << 30)
+WIIU_BOOT_VECTOR 0x08100100
+CPU = 248.625 MHz × 5 = 1.243 GHz; timebase = bus/4
+```
+NetBSD pone sus framebuffers en `0x17500000`/`0x178C0000` (los reubica); Wiintosh usa `0x8F000000`/`0x8FE00000` (último 16 MB de MEM2).
+
+### ⚠️ Hallazgo importante: número de IRQ de la GPU
+- OpenBIOS de Wiintosh (`arch/ppc/wii/wii.fs`) declara `gx2` con **`interrupts = 2`** en el PI.
+- NetBSD usa **`WIIU_PI_IRQ_GPU7 = 23`** en el mismo PI.
+- `WiiInterruptController` (Wiintosh) usa el número de vector directamente como bit del registro de causa del PI de Cafe (`readCafeIntCause32(0)`), así que el vector 2 **no** sería la GPU. El valor 2 probablemente es un marcador sin uso (WiiCafeFB nunca registra interrupciones).
+- **Acción:** para la fase 1.4 usar el vector **23** (cambiar el nodo en OpenBIOS o, sin tocar OpenBIOS, leer la causa del PI directamente en la sonda). Verificar en la sonda: con vblank D1 habilitado en `DxMODE_INT_MASK`, el bit 23 de `0x0C000078` debería activarse.
+- Esto sustituye lo dicho en 11.2.
+
+### Otras oportunidades gracias a NetBSD (fuera del alcance de la GPU, pero muy beneficiosas)
+- **SMP en Wiintosh:** Tiger soporta multiprocesador en PPC. Portar el arranque de núcleos de `cpu.c` (trampolín en `0x08100100`, bits `SCR`) + IPIs (`ipi_latte.c`, IRQ 20–22) a `WiiCPU`/`WiiPE` daría **3 núcleos** en vez de 1 (`hw.ncpu: 1` hoy). Esto aceleraría todo el escritorio (Quartz es software). Proyecto grande; proponerlo a upstream.
+- **EHCI:** USB 2.0 para la red del Redmi (480 Mbit/s en vez de 12) y el disco.
+- **Cursor 64×64:** Wiintosh usa 32×32; el hardware admite 64×64.
+
+## 12.2 linux-wiiu / linux-loader (GPL‑2)
+- `gitlab.com/linux-wiiu/linux-wiiu`: framebuffer TV + GamePad, sin aceleración (issue "Support GX2 card+acceleration" #19 sin resolver: el driver `radeon` depende de PCI).
+- linux-loader (base de `Wiintosh/wiiu-loader`): configuración de D1/D2, crossbar según `LT_GPU_ENDIANNESS`, protocolo IPC `CMD_POWEROFF 0xcafe0001`, `CMD_REBOOT 0xcafe0002`.
+
+## 12.3 wiiMac (Bryan Keller) — Mac OS X 10.0 en Wii
+- `github.com/bryankeller/wiiMac`, blog `bryankeller.github.io/2026/04/08/porting-mac-os-x-nintendo-wii.html`.
+- Framebuffer con doble búfer RGB→YUV (el VI de la Wii solo muestra YUV). Útil como otro ejemplo de IOFramebuffer para hardware Nintendo; no aplica a la GPU R7xx.
+
+## 12.4 RadeonHD.kext (osx86, Dong Luo) — referencia de IOKit + R6xx/R7xx
+- `github.com/AustinSMU/osx86-driver-radeonhd`: `IOFramebuffer` para Radeon HD 2xxx–4xxx portado de `xf86-video-radeonhd`. **Sin aceleración 2D/3D**. Útil como ejemplo de código de pantalla R7xx dentro de un kext de Mac OS X (modos, escalador, cursor). Hubo intentos en PowerPC Leopard (hilo de MacRumors).
+
+## 12.5 VMsvga2 (Zenith432) y VMQemuVGA — aceleración en Mac OS X por terceros
+- VMsvga2 (SourceForge `vmsvga2`): kext framebuffer + **plugin GA (blits 2D para mover ventanas)** + superficies `IOAccelSurface`; **nunca** implementó GLD (OpenGL). Es el mejor ejemplo existente de plugin GA y de clases `IOAccelerator` de un tercero (10.5/10.6 x86; adaptar a 10.4 PPC).
+- VMQemuVGA (`github.com/startergo/VMQemuVGA`): en agosto de 2026 logró despachar las 2 primeras funciones GL de un GLD → confirma lo difícil que es la fase 4.
+
+## 12.6 Código de GPU R600/R700 reutilizable
+| Proyecto | Licencia | Para qué |
+|---|---|---|
+| Linux `drivers/gpu/drm/radeon` (`r600.c`, `rv770.c`, `r600d.h`, `r600_cs.c`) | GPL‑2 | Secuencias de CP, IH, fences; **no copiar código tal cual** al kext (licencia distinta a la de Wiintosh, que es BSD‑3); usar como referencia de registros |
+| `xf86-video-ati` (`r6xx_accel.c`, `r600_exa.c`, `r600_shader.c`) | MIT | **Sí se puede portar**: relleno/copia 2D con shaders ya ensamblados y soporte big‑endian |
+| Mesa `r600` (classic 7.x / gallium) | MIT | Fase 4 y compilador de shaders R700 |
+| decaf-emu (`libgpu/latte`) | GPL‑3 | Registros y PM4 tal como los usa la Wii U; desensamblador PM4 para depurar |
+| Cemu | MPL‑2.0 | Comportamiento de Latte (tiling, formatos) |
+| AMD docs abiertas (R6xx/R7xx 3D, R700 ISA, RV630/RV770 display) | Documentación | Fuente primaria |
+| NetBSD `wiiufb.c` | BSD‑2 | Compatible con Wiintosh: se puede copiar código |
+
+**Licencias:** `Wiintosh/osx-drivers` es BSD‑3 (ver `LICENSE`). Se puede incorporar código MIT/BSD (xf86-video-ati, NetBSD, Mesa) con su aviso; el código GPL (Linux, decaf) solo como referencia.
+
+## 12.7 Vanilla (GamePad por software)
+Ver Parte 4. GPL‑2. Pixel 6a compatible sin parches.
+
+---
+
+# PARTE 13 — Correcciones y fe de erratas (leer antes de actuar)
+
+Las partes se escribieron en orden cronológico; donde se contradigan, **vale lo más reciente**:
+1. **Dónde corre Claude:** en el **MacBook** (Parte 5), no en el Redmi (partes 1–3 lo suponían). El Redmi es solo el puente SSH.
+2. **SSH a Tiger:** con `ProxyJump` desde el Mac **no** hace falta `update-crypto-policies` en Fedora (5.2).
+3. **Pixel 6a:** conectado por **USB al Mac** (Parte 6); Bluetooth PAN y túneles de la Parte 4.4 / 5.4 ya no son necesarios.
+4. **Sistema:** Mac OS X **10.4.11** (no 10.4.0). Toolchain: gcc 4.0.1 en la Wii U (Parte 9–10). No hay `/Developer/SDKs`; se compila contra `Kernel.framework`.
+5. **IRQ de la GPU:** vector **23** del PI (NetBSD), no el 2 que declara OpenBIOS (Parte 12.1). Sustituye 11.2 y 2.3/4.4 donde digan "línea 2".
+6. **D2 / cursor D2:** los offsets `+0x800` están **confirmados** por NetBSD (`wiiufb.c`), ya no son "NO VERIFICADO".
+7. **Cursor:** el hardware admite **64×64** (NetBSD); Wiintosh usa 32×32.
+8. **`IOAccelerationUserClient`:** es el cliente genérico de `IODisplayWrangler`, no indica aceleración (Parte 10.3).
+9. **`ioreg` de Tiger:** sin `-r`; `-c/-l/-n` excluyentes; usar `ioreg -p IODeviceTree -n gx2 -w0 -x` y `ioreg -c Clase -w0 -x` (Parte 9.1).
+10. **Boot-arg de depuración:** `-wii<prefijo>dbg`, p. ej. `-wiifbdbg` (Parte 8.5).
+11. **GamePad:** no hay GamePad físico; Vanilla probablemente solo funciona en Aroma (Parte 4.2). La "2ª pantalla GamePad" queda aparcada.
+12. **Memoria:** MEM2 = `0x10000000–0x8FFFFFFF` (2 GB, NetBSD). Los framebuffers de Wiintosh están en los últimos 16 MB de MEM2; OpenBIOS mapea ≥`0x8F000000` como I/O. Reservar memoria nueva siempre con `IOBufferMemoryDescriptor` (Parte 11.1).
