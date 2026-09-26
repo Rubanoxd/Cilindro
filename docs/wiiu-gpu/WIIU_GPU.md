@@ -15,8 +15,10 @@
 > - **Parte 14** — Resultados medidos en la Wii U (anillo, CP_DMA, plugin GA funcionando).
 > - **Parte 15** — Por qué el WindowServer no usa el plugin (faltan superficies CGS).
 > - **Parte 16** — Resultados tras la 15 (no hay write-through en xnu PPC; `sample` roto).
-> - **Parte 17** — Parche del bit W, interfaz exacta de superficies, muestreador y **plan actual (17.5)**.
-> - Si algo se contradice, vale la parte **más reciente** (17 > 16 > 15 > …).
+> - **Parte 17** — Parche del bit W, interfaz de superficies, muestreador.
+> - **Parte 18** — El WindowServer pide superficies (experimento IOAccelTypes ✅).
+> - **Parte 19** — Tabla de métodos exacta, secuencia esperada, diseño con backing en RAM y **plan actual (19.6)**.
+> - Si algo se contradice, vale la parte **más reciente** (19 > 18 > 17 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -33,14 +35,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 17.5** (experimento IOAccelTypes → parche del bit W → superficies con backing → muestreador → VBL).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 19.6** (user client de superficies en modo registro → WriteLock+Flush reales para wID 1 → superficies por ventana → VBL → parche W opcional).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -1787,3 +1789,103 @@ Estructuras (IOGraphics‑193.2.2, `IOAccelTypes.h`/`IOAccelSurfaceConnect.h`): 
 | 4 | Muestreador propio (17.3) | 1 día | bajo | Dónde gasta el WindowServer tras 2/3 |
 | 5 | `GetBeamPosition` + VBL (IRQ 23) | 1–2 días | bajo | Beam sync |
 | 6 | SMP (NetBSD) | semanas | alto | Rendimiento general |
+
+---
+
+# PARTE 18 — Resultados del plan 17.5 (2026-09-27), resumen
+
+- ✅ **El WindowServer pide superficies.** `WiiGX2Accel` hereda ahora de `IOAccelerator` y, mientras está cargado, publica en `WiiCafeFB` `IOAccelTypes = "IOService:/WiiPE/gx2@c200000/WiiGX2Accel"` e `IOAccelIndex = 0`. Su user client propio usa el tipo `'gx2c'` (0x67783263). Tras `killall loginwindow`, el WindowServer carga el plugin GA y **pide una vez `newUserClient type 0`** al arrancar; al recibir Unsupported sigue en software, sin errores.
+- Trampas nuevas:
+  - `IOAccelSurfaceControl.h` no viene en las cabeceras de Tiger, pero `IOAccelFindAccelerator`, `IOAccelCreateSurface` e `IOAccelDestroySurface` sí están exportadas por IOKit.framework: basta declarar los prototipos a mano.
+  - Las KPI (`proc_selfname`…) no se pueden mezclar con dependencias `com.apple.kernel.*`.
+  - La `sys/proc.h` de MacPPCKernelSDK no compila contra Tiger.
+  - `kextunload` con el WindowServer conectado funciona.
+- Observación del humano: nota las ventanas "más fluidas" y vio una ventana semitransparente con rayas horizontales (foto). [Ver 19.4]
+
+---
+
+# PARTE 19 — Respuestas a 18.3 y siguiente paso
+
+Fuentes nuevas: **VMQemuVGA** (`github.com/startergo/VMQemuVGA`, **licencia MIT**, deriva de VMsvga2 de Zenith432): `FB/VMAccelSurfaceClient.cpp` (1 173 líneas) implementa el cliente de superficies con la tabla verificada contra `VMsvga2Surface.cpp`, y su `LEDGER.md` registra lo que hizo el WindowServer real de 10.6 con él. Lo de 10.6 es orientativo: 10.4 puede diferir → **registrar todo**.
+
+## 19.1 Tabla de métodos exacta (IOExternalMethod, estilo antiguo, válido en xnu‑792)
+| # | Método | Tipo | count0 | count1 |
+|---|---|---|---|---|
+| 0 | ReadLockOptions | `kIOUCScalarIStructO` | 1 | variable (`IOAccelSurfaceInformation`) |
+| 1 | ReadUnlockOptions | `kIOUCScalarIScalarO` | 1 | 0 |
+| 2 | GetState | `kIOUCScalarIScalarO` | 0 | 1 (devolver `kIOAccelSurfaceStateIdleBit`) |
+| 3 | WriteLockOptions | `kIOUCScalarIStructO` | 1 | variable |
+| 4 | WriteUnlockOptions | `kIOUCScalarIScalarO` | 1 | 0 |
+| 5 | Read | `kIOUCScalarIStructI` | 0 | variable (`IOAccelSurfaceReadData`) |
+| 6 | SetShapeBacking | `kIOUCScalarIStructI` | 4 | variable (región) |
+| 7 | SetIDMode | `kIOUCScalarIScalarO` | 2 (wid, modebits) | 0 |
+| 8 | SetScale | `kIOUCScalarIStructI` | 1 | variable |
+| 9 | SetShape | `kIOUCScalarIStructI` | 2 (options, fbIndex) | variable (`IOAccelDeviceRegion`) |
+| 10 | Flush | `kIOUCScalarIScalarO` | 2 (framebufferMask, options) | 0 |
+| 11 | QueryLock | `kIOUCScalarIScalarO` | 0 | 0 (la respuesta es el código: Success / CannotLock) |
+| 12 | ReadLock | `kIOUCScalarIStructO` | 0 | variable |
+| 13 | ReadUnlock | `kIOUCScalarIScalarO` | 0 | 0 |
+| 14 | WriteLock | `kIOUCScalarIStructO` | 0 | variable |
+| 15 | WriteUnlock | `kIOUCScalarIScalarO` | 0 | 0 |
+| 16 | Control | `kIOUCScalarIScalarO` | 2 | 1 |
+| 17 | SetShapeBackingAndLength | `kIOUCScalarIStructI` | 5 | variable |
+
+Ojo con tu hallazgo de 14.2 (xnu‑792 omite el lado vacío en `structureI_structureO`); aquí casi todo es `ScalarI*` y los argumentos llegan en orden: escalares primero, luego el puntero a la estructura y su tamaño (en `StructO`: `p[n] = info*`, `p[n+1] = size*`).
+
+## 19.2 Secuencia observada (10.6, VMQemuVGA) y lo que espera el WindowServer
+1. `IOServiceOpen(accel, type 0)` → **`SetIDMode(wID = 1, modebits = 0x24)`**: wID 1 es la **superficie propia del WindowServer** (pantalla entera); 0x24 = `ColorDepth8888 (0x4) | WindowedBit (0x20)`.
+2. **`SetShape(options, fbIndex, región)`**: región con `bounds` = pantalla (en 10.6 también la barra de menús 1680×22, ventanas y un 64×64 del spinner).
+3. Bucle por cada actualización: **`QueryLock` → `WriteLock` → (el WindowServer dibuja) → `WriteUnlock` → `Flush(fbMask, options)`**. En 10.6 se vio a unos 39 Hz de forma estable.
+4. `GetState` → idle.
+
+Lo que devuelve `WriteLock` (según VMsvga2 `surface_write_lock_options` y VMQemuVGA l.946–1136):
+- Validar `*infoSize >= sizeof(IOAccelSurfaceInformation)`; si no → `kIOReturnBadArgument`.
+- Sin id/forma/bpp → `kIOReturnNotReady`; doble bloqueo → `kIOReturnCannotLock`; sin memoria → `kIOReturnNoMemory`.
+- **Backing del driver** (no del cliente): `IOBufferMemoryDescriptor` creado en el **primer** WriteLock, que solo crece y dura hasta cerrar la superficie; mapeado en la tarea del WindowServer (`createMappingInTask(owningTask, 0, kIOMapAnywhere)`) y en el kernel.
+- `info->address[0] = base_mapeo_cliente + shape_y*rowBytes + shape_x*bpp`; `rowBytes` = paso de la **asignación** (ancho de pantalla × 4); `width/height` = forma actual; `pixelFormat = modebits`; `colorTemperature[0] = 0x1CCCC` (precedente de GeForce.kext).
+- Lección de VMQemuVGA: **un WriteLock que funciona sin un Flush que funcione = pantalla azul/rota** ("the blue-screen boot"). Implementar los dos a la vez.
+
+`Flush`: copiar la región de la forma desde el backing al fb **respetando los dos pasos distintos** (el de la superficie y el del fb), recortando a la forma.
+
+**Mínimo aceptable:** métodos 2, 7, 9, 10, 11, 14, 15 reales; 0/1/3/4/12/13 delegando en los mismos; 6/17 → `kIOReturnUnsupported` (la librería no reintenta si falla el 6); 5/8/16 → `kIOReturnUnsupported` o éxito vacío, registrando si se llaman.
+
+## 19.3 Diseño para la Wii U (mejor que el parche W)
+El backing de la superficie es **RAM normal de MEM2, con caché copy‑back para el WindowServer**: las lecturas de la composición van a caché. Además se evita el cuello de 18 MB/s **sin tocar el kernel**.
+- `IOBufferMemoryDescriptor::withOptions(kIOMemoryPhysicallyContiguous | kIOMemoryKernelUserShared, rowBytes*alto, PAGE_SIZE)`. 3,6 MB contiguos para la superficie wID 1; si falla la contigüidad, usar varios tramos y un CP_DMA por tramo.
+- **Flush:**
+  1. `dcbst` (flush de la caché de datos, `flushDataCache`) del rango de la región en el mapeo **del kernel** de la superficie. Las cachés del 750 van por dirección física, así que vale cualquier alias cacheable.
+  2. `sync`.
+  3. CP_DMA fila a fila superficie → fb (ya lo tienes: ×28 más rápido que la CPU).
+  4. Fence.
+  5. **Esperar el fence antes de volver** (primera versión síncrona). Más adelante: volver ya y hacer que el siguiente `WriteLock` espere al fence anterior.
+- Coste del flush de caché: ~1 `dcbst` por cada 32 bytes de la región actualizada. Con una región de 512 KB son ~16 000 instrucciones (del orden de 0,1–0,5 ms), frente a los 14 ms actuales escribiendo sin caché.
+- El **parche del bit W (17.1) pasa a ser opcional**: solo haría falta si algo más siguiera leyendo el fb con la CPU.
+
+Riesgos:
+- Si el WindowServer usa la superficie para toda la pantalla y el Flush falla → pantalla congelada. Mantén el SSH abierto y el `kextunload` a mano.
+- Memoria: si 10.4 abre superficies por ventana, limita la memoria total y devuelve `kIOReturnNoMemory`; se supone que el WindowServer volvería a software [NO VERIFICADO].
+
+## 19.4 Sobre la sensación de fluidez y la foto
+- Con la Parte 18, el WindowServer **no** usa ninguna superficie (recibe Unsupported) y el contador de envíos no se mueve. En teoría nada debería ir más rápido. Dos posibilidades:
+  1. Percepción o condiciones distintas (tras `killall loginwindow` la sesión está "limpia": menos ventanas y cachés vacías).
+  2. Algún efecto real de tener `IOAccelTypes` publicado (el WindowServer podría cambiar de camino) [NO VERIFICADO].
+- Cómo comprobarlo: grabar en vídeo el mismo arrastre de ventana con el kext cargado y sin él, con la misma sesión, y comparar.
+- **La foto:** la ventana se ve **semitransparente** con el fondo detrás y hay **rayas horizontales** abajo a la derecha. Las ondas de colores son muaré de fotografiar la TV. Tiger no hace transparentes las ventanas al arrastrarlas, pero **sí durante las animaciones de cerrar/aparecer (fundido)**. Posible explicación: se capturó un fundido a medias y las rayas son restos de un redibujado parcial. También podrían ser líneas de caché sucias de las pruebas de `cachebench` de la Parte 16, desalojadas más tarde, como la "tira de basura" que ya se vio.
+  → Pedir al humano que diga si aparece **sin** haber hecho pruebas de caché desde el último reinicio. Si reaparece después de reiniciar, es un bug nuestro y hay que investigarlo.
+
+## 19.5 Parche W (respuesta 18.3‑1), por si se sigue necesitando
+- **Mejor en tiempo de ejecución desde `WiiGX2Accel`** (o `WiiPE`), antes de que el WindowServer mapee nada: es reversible reiniciando y no hay que tocar OpenBIOS. `WiiPE_Patcher.cpp` ya sabe encontrar símbolos del kernel.
+- Qué buscar en `otool -tv -p _mapping_make /mach_kernel`: tras la búsqueda del physent, una secuencia `li rW,2` → prueba del bit `mmFlgCInhib` (0x2) de `pattr` → `ori rW,rW,4` → prueba del bit `mmFlgGuarded` (0x1) → `ori rW,rW,1` → `rlwinm/slwi rX,rW,3,...` + `or` hacia `mpVAddr`.
+- Parche: sustituir la instrucción `ori rW,rW,1` (la que añade G) por un `b trampolín`. En el trampolín: `ori rW,rW,1` (la original) → `andi. rT,pattr,2` (usar un registro muerto en ese punto, y comprobar que cr0 no está vivo) → `bne vuelta` → `ori rW,rW,8` → `b vuelta`. Después, `dcbst`/`sync`/`icbi`/`isync` sobre las dos zonas.
+- Que el humano pase el desensamblado completo de `_mapping_make` y lo concretamos.
+- **Prioridad: por debajo de 19.3.**
+
+## 19.6 Plan actualizado (sustituye a 17.5)
+| # | Tarea | Coste | Riesgo |
+|---|---|---|---|
+| 1 | User client de superficies en **modo registro**: métodos 0–17 que registran argumentos. SetIDMode/SetShape/QueryLock/GetState devuelven éxito; WriteLock devuelve `kIOReturnNoMemory` (para que el WindowServer vuelva a software). Resultado: la secuencia real de 10.4 (wID, modebits, regiones) | horas | bajo |
+| 2 | WriteLock + Flush reales (19.2/19.3) para **wID 1** (pantalla completa); el resto de wID, igual que en el paso 1 | 2–4 días | medio (pantalla) |
+| 3 | Superficies por ventana si 10.4 las pide | 1–2 semanas | medio |
+| 4 | Flush asíncrono + `GetBeamPosition`/VBL (IRQ 23) | días | bajo |
+| 5 | Parche W (19.5), solo si hace falta | 1–2 días | medio |
+| 6 | SMP (NetBSD) | semanas | alto |
