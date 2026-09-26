@@ -17,8 +17,10 @@
 > - **Parte 16** — Resultados tras la 15 (no hay write-through en xnu PPC; `sample` roto).
 > - **Parte 17** — Parche del bit W, interfaz de superficies, muestreador.
 > - **Parte 18** — El WindowServer pide superficies (experimento IOAccelTypes ✅).
-> - **Parte 19** — Tabla de métodos exacta, secuencia esperada, diseño con backing en RAM y **plan actual (19.6)**.
-> - Si algo se contradice, vale la parte **más reciente** (19 > 18 > 17 > …).
+> - **Parte 19** — Tabla de métodos exacta y diseño con backing en RAM.
+> - **Parte 20** — ✅ Superficies CGS funcionando (el WindowServer compone por la GPU).
+> - **Parte 21** — Qué más delegar, plan de SMP, cómo hacerlo permanente y **plan actual (21.4)**.
+> - Si algo se contradice, vale la parte **más reciente** (21 > 20 > 19 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -35,14 +37,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 19.6** (user client de superficies en modo registro → WriteLock+Flush reales para wID 1 → superficies por ventana → VBL → parche W opcional).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 21.4** (permanente seguro → Read → VBL → 16 bpp → SMP → PR a upstream).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -1889,3 +1891,106 @@ Riesgos:
 | 4 | Flush asíncrono + `GetBeamPosition`/VBL (IRQ 23) | días | bajo |
 | 5 | Parche W (19.5), solo si hace falta | 1–2 días | medio |
 | 6 | SMP (NetBSD) | semanas | alto |
+
+---
+
+# PARTE 20 — Superficies CGS funcionando en Tiger (2026-09-27), resumen
+
+- **Secuencia real de 10.4.11:** un solo cliente, `SetIDMode(wid 1, 0x24)`. Por cada actualización: `SetShape(0xD = NonBlocking|IdentityScale|FrameSync, fb 0, región repintada)` → `QueryLock` → `WriteLock(infoSize 68)` → `WriteUnlock` → `Flush(1, 0)` → `SetShape(0x1, región vacía)`. La forma es la **zona repintada**, no una ventana. Si WriteLock devuelve NoMemory, el WindowServer sigue en software.
+- **Implementación:**
+  - Backing de pantalla completa con caché (`kIOMemoryKernelUserShared`, no contiguo), sembrado desde el fb por CP_DMA.
+  - WriteLock devuelve `base + y·5120 + x·4`.
+  - Flush hace `dcbf` + CP_DMA por segmento físico + fence. Es asíncrono: WriteLock espera al flush anterior.
+- **Convenciones de xnu‑792:**
+  - ScalarI→ScalarO: `(in…, &out…)`.
+  - ScalarI→StructO: `(in…, out, &outCount)`.
+  - ScalarI→StructI: `(in…, struct, size)`, **salvo con 5 escalares: `(in0..in4, struct)` sin tamaño**.
+  - `IOAccelSurfaceInformation` de Tiger mide **68 bytes**; la de MacPPCKernelSDK, 84 → hay que usar una estructura propia.
+- **Resultado:** miles de flushes, 0 timeouts, 0 errores, sin glitches. El camino de la GPU cuesta < 1 % de CPU; el **WindowServer está al ~44 % de CPU** componiendo en software en un solo núcleo. El humano lo nota "un pelín más fluido, sobre todo el scroll".
+
+---
+
+# PARTE 21 — Respuestas a 20.4
+
+## 21.1 ¿Qué más puede delegar CGS de 10.4 sin QE?
+Con el código disponible (IOKitUser‑277.8, IOGraphics‑193.2.2):
+- **Del cliente de superficies ya se usa todo lo útil.** `Read` (índice 5) es para leer píxeles de la superficie (capturas, `CGWindowListCreateImage`); implementarlo, desde el backing, deja las capturas coherentes, pero no ahorra CPU. `SetScale` (8) es para superficies escaladas (vídeo, OpenGL), que sin QE no se ven. `Control` (16) no tiene selectores documentados; basta con registrarlo.
+- **Superficies por ventana:** la secuencia medida muestra **solo wID 1**. Tiger sin QE mantiene los *backing stores* de las ventanas en RAM y compone él mismo en la superficie de pantalla. No hay más que delegar por esta vía.
+- **Blitters del GA:** `copyRegionProc` / `IOFBBlitSurfaceSurfaceCopy` y `memCopyProc` existen en IOGraphicsLib, pero el contador muestra que no se llaman. Probablemente solo se usan con superficies de ventana o en modos concretos [NO VERIFICADO]. Déjalos implementados y registrando.
+- **Conclusión:** el 44 % es composición en software (mezclas alfa, sombras, transparencias de menús, en un G3 sin AltiVec). Sin QE (OpenGL) Tiger no ofrece más delegación. Las palancas que quedan:
+  1. **SMP** (21.2): no acelera un único hilo de composición, pero las aplicaciones y el resto del sistema dejan de competir con el WindowServer por el único núcleo.
+  2. Menos trabajo de composición: probar **16 bpp** (`kIOAccelSurfaceModeColorDepth1555`), que reduce a la mitad los bytes que mueve la CPU (medir si el WindowServer lo acepta con superficie 1555) [NO VERIFICADO].
+  3. Flush en vblank (FrameSync, bit 0x8 de SetShape): usar `GetBeamPosition`/VBL para no repintar a más ritmo del que se ve.
+
+## 21.2 Plan concreto de SMP (núcleos 1 y 2)
+
+**Lo que ya hay:**
+- xnu‑792 PPC soporta hasta 256 CPU (`MAX_CPUS 256`, `osfmk/ppc/exception.h`).
+- Arranque de secundarios (`osfmk/ppc/cpu.c`, `cpu_start()` ~l.287): si `start_paddr == 0x100` (vector de reset) escribe en `ResetHandler` (memoria baja) `RESET_HANDLER_START`, `_start_cpu` y `&PerProcTable[cpu]`, y luego llama a **`PE_cpu_start()` → `IOCPU::startCPU(start_paddr, arg_paddr)`**. Después espera `SignalReady`.
+- Sincronización del timebase: `cpu_sync_timebase()` usa `cpu_signal(master, SIGPcpureq, CPRQtimebase)`, o sea, **IPIs**; no hace falta `time_base_enable` si las IPIs funcionan.
+- IPIs: `PE_cpu_signal()` → **`IOCPU::signalCPU(target)`**.
+
+**Lo que falta en Wiintosh (`WiiCPU.cpp`):**
+- `_numCPUs = 1` fijo.
+- `startCPU`, `haltCPU`, `quiesceCPU` e `initCPU(!boot)` vacíos.
+- `WiiInterruptController` solo lee la causa del núcleo 0 (`readCafeIntCause32(0) // TODO`).
+- El árbol de OpenBIOS solo tiene `PowerPC,Espresso@0`.
+
+**Hardware (de NetBSD, `sys/arch/evbppc/nintendo/cpu.c`, `pic_pi.c`, `ipi_latte.c`, `powerpc/include/oea/spr.h`):**
+- **SCR = SPR 947 (0x3B3)**: `WAKE(n) = 1 << (23 - n)` despierta el núcleo n; `IPI_PEND(n) = 1 << (20 - n)` es la IPI pendiente del núcleo n (se envía poniéndolo y se reconoce borrándolo en bucle hasta que se quede a 0).
+- Vector de arranque de los secundarios: **`0x08100100`** (MEM0).
+- Trampolín de NetBSD, a copiar allí (con `sync` + `icbi` después):
+  ```
+  lis   r3, hi(entry) ; ori r3, r3, lo(entry) ; mtsrr0 r3
+  li    r3, 0         ; mtsrr1 r3                 ; MSR = 0 (modo real)
+  lis   r3, 0x0011    ; ori r3, r3, 0x0024 ; mtspr 1008 (HID0), r3
+  lis   r3, 0xb1b0    ; mtspr 1011 (HID4), r3 ; sync
+  lis   r3, 0xe7fd    ; ori r3, r3, 0xc000 ; mtspr 944 (HID5), r3 ; sync
+  rfi
+  ```
+  Para XNU, `entry` = **`start_paddr` (0x100)**: el secundario entra por el vector de reset de XNU, que lee `ResetHandler` y salta a `_start_cpu` con su `per_proc`.
+- El PI tiene registros por núcleo: `INTSR(n) = 0x0C000078 + n*8`, `INTMSK(n) = 0x0C00007C + n*8`. IPIs = IRQ 20 + n.
+- El boot CPU de NetBSD pone en `SCR`: `(spr & ~0x40000000) | 0x80000000`, y `HID5 |= H5A | PIRE` (PIR = número de núcleo). Revisar qué hace ya Wiintosh/OpenBIOS con eso.
+- Topología: el núcleo 1 tiene más L2 (2 MB frente a 512 KB).
+
+**Pasos:**
+1. **OpenBIOS:** añadir `PowerPC,Espresso@1` y `@2` en `/cpus` (`reg` 1/2, `state "stopped"`, mismas propiedades que @0), o que `WiiPE` cree los nubs.
+2. **`WiiCPU`:**
+   - `_numCPUs = 3`; registrar cada CPU con `ml_processor_register` (`boot_cpu = false`, `start_paddr = 0x100`).
+   - El núcleo de arranque: `processor_start` como ya hace. Los secundarios: `processor_start(machProcessor)` → XNU llama a `startCPU`.
+   - `startCPU(start_paddr, arg)`: mapear `0x08100100` (`IOMemoryDescriptor::withPhysicalAddress` + map, o `ml_phys_write`), copiar el trampolín con `entry = start_paddr`, `flushDataCache`/`icbi`, y `mtspr 947, mfspr(947) | (1 << (23 - n))`.
+   - `initCPU(false)` en el secundario: habilitar su interrupción externa en el PI (`INTMSK(n)`), sus IPIs, y `setCPUState(kIOCPUStateRunning)`.
+   - `signalCPU(target)`: `mtspr 947, mfspr(947) | (1 << (20 - target))`.
+   - `ipiHandler`: comprobar `IPI_PEND(cpu_number())` en SCR, borrarlo en bucle y llamar `ipi_handler()`.
+3. **`WiiInterruptController`:** usar `cpu_number()` para leer/escribir `INTSR/INTMSK` de **ese** núcleo. Enrutar los dispositivos solo al núcleo 0 al principio (máscaras de 1 y 2 a 0 salvo IPI). Primero comprobar IPI en SCR.
+4. **Timebase:** XNU lo sincroniza con `CPRQtimebase` una vez que funcionan las IPIs. Si hubiera deriva, copiar `md_presync/md_sync_timebase` de NetBSD.
+5. **Cachés:** Espresso es coherente entre núcleos (bus 60x/MEI). El trampolín fija HID0/4/5 como NetBSD. XNU inicializa las cachés del secundario en `_start_cpu` según el PVR: comprobar que acepta el PVR de Espresso igual que en el núcleo 0 (Wiintosh ya lo hace funcionar en el 0).
+6. **Seguridad:** boot-arg `cpus=1` (XNU lo respeta: `max_ncpus`) para volver a un núcleo. Probar primero despertando **solo el núcleo 1**.
+
+**Riesgos:**
+- Un fallo en el secundario cuelga el arranque: siempre con `-v` y con `cpus=1` a mano.
+- Latte puede necesitar que IOSU/loader haya dejado los núcleos 1/2 en espera en `0x08100100` (NetBSD arranca desde el mismo linux-loader, así que es de esperar que sí).
+- Proponerlo a upstream (Goldfish64): toca `WiiPlatform` y OpenBIOS.
+
+## 21.3 Hacerlo permanente con seguridad
+Orden recomendado:
+1. **Interruptor por boot-arg** en `WiiGX2Accel::start()`: si existe `-nogx2` (o `wiigx2=0`), devolver `false`. El plugin ya falla limpio sin el kext y `WiiCafeFB` no publica `IOAccelTypes`/`IOCFPlugInTypes` → Tiger vuelve al framebuffer simple.
+2. **Instalar en `/System/Library/Extensions/WiiGX2Accel.kext`** (root:wheel, 755/644), **sin** `OSBundleRequired`:
+   - **Arranque seguro (`-x`) no lo carga** → otra vía de escape sin tocar la SD.
+   - Lo carga `kextd` por matching de `NTDOY,gx2` (`IOProbeScore` bajo, `IOMatchCategory` propio) antes de `loginwindow`. Si llegara tarde, el WindowServer arranca en software y usa la GPU en el siguiente inicio de sesión.
+   - Después: `sudo touch /System/Library/Extensions` y `kextcache -k /System/Library/Extensions` para regenerar la caché.
+3. **No meterlo en el mkext de la SD todavía:** el mkext se carga siempre (incluso con `-x` si es `Root`) y un fallo obligaría a sacar la SD. Hacerlo solo cuando lleve semanas estable, y proponerlo a upstream como parte de `WiiGraphics`.
+4. **Apagado limpio:** en `stop()` y al apagar/reiniciar (registrarse en `IOPMrootDomain` con `registerPrioritySleepWakeInterest` o equivalente de 10.4), **detener el CP** (`CP_ME_CNTL = ME_HALT|PFP_HALT`) para que el anillo en RAM de Mac OS X no se ejecute al reiniciar por Aroma/Cafe OS.
+5. **Recuperación documentada:**
+   - En OpenBIOS: `setenv boot-args "-v -nogx2"` o `"-x"`.
+   - Por SSH: `sudo mv /System/Library/Extensions/WiiGX2Accel.kext /tmp/` + `sudo touch /System/Library/Extensions`.
+
+## 21.4 Plan (sustituye a 19.6)
+| # | Tarea | Coste | Riesgo |
+|---|---|---|---|
+| 1 | Permanente seguro (21.3): boot-arg, /S/L/E, parar el CP al apagar | 1 día | bajo |
+| 2 | `Read` (capturas coherentes) + registro de `Control/SetScale` | horas | bajo |
+| 3 | VBL / `GetBeamPosition` (IRQ 23) y flush sincronizado a vblank | 1–2 días | bajo |
+| 4 | Probar superficie 16 bpp | horas | bajo |
+| 5 | **SMP** (21.2), empezando por el núcleo 1 | 1–3 semanas | alto |
+| 6 | Proponer a Goldfish64 (PR a `Wiintosh/osx-drivers`) | — | — |
