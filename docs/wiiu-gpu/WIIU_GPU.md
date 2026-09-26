@@ -1141,3 +1141,53 @@ Siguientes pasos:
 1. `ssh wiiu 'sw_vers; ioreg -l -w0 | grep -i -A5 gx2; kextstat | grep -i wii; ls /Volumes'` — ver drivers cargados y si la partición BOOT está montada.
 2. Instalar Xcode 2.5 en la Wii U (o en la VM) y compilar `osx-drivers` sin cambios.
 3. Fase 0: sonda.
+
+---
+
+# PARTE 7 — Análisis de la segunda salida (2026-09-26)
+
+Salida de `ssh wiiu 'sw_vers; kextstat | grep -i wii; ioreg -l -w0 | grep -i -A5 gx2; ls /Volumes'`:
+- `10.4.11 (8S165)`.
+- Cargados los 6 kexts de Wiintosh **0.5.2**: WiiPlatform (16), WiiEXI (21), WiiAudio (24), WiiUSB (25), WiiStorage (27), **WiiGraphics (28, 0x7000 bytes)**. El framebuffer `WiiCafeFB` está activo → el problema de dependencias (issue #19) no afecta a esta instalación.
+- `ioreg: error: can't obtain properties.` → el `ioreg -l` completo de Tiger falla (registro grande o propiedad no serializable). Usar consultas acotadas:
+  ```bash
+  ssh wiiu 'ioreg -c WiiCafeFB -l -w0'          # el framebuffer y sus propiedades
+  ssh wiiu 'ioreg -n gx2 -l -w0'                # el nodo de OpenBIOS
+  ssh wiiu 'ioreg -p IODeviceTree -n gx2 -l -w0' # plano del árbol de dispositivos (reg, interrupts)
+  ssh wiiu 'ioreg -c IODisplayConnect -l -w0; ioreg -c IOFramebuffer -r -d 1'
+  ```
+  Si alguno vuelve a fallar, quitar `-l` y bajar profundidad (`-d 2`), o `ioalloccount`/`ioclasscount WiiCafeFB`.
+- `/Volumes`: **Hackintosh HD** (sistema), **Mac OS X Install DVD** (partición instaladora), **Xcode Tools**.
+  - La partición FAT **BOOT no está montada** → para instalar mkext nuevos hay que montarla:
+    ```bash
+    ssh wiiu 'diskutil list'                          # localizar la FAT32 "BOOT" (p. ej. disk0s2)
+    ssh wiiu 'sudo diskutil mount /dev/disk0sX'       # o: sudo mkdir /Volumes/BOOT && sudo mount_msdos /dev/disk0sX /Volumes/BOOT
+    ```
+    Incluir el montaje en el script `wiiu-kext install` y desmontar (`diskutil unmount`) antes de reiniciar para no corromper la FAT.
+  - Hay un volumen **Xcode Tools** montado: probablemente las Xcode Tools del DVD de Tiger (Xcode 2.0–2.2). Comprobar e instalar:
+    ```bash
+    ssh wiiu 'ls "/Volumes/Xcode Tools"; ls /Developer 2>/dev/null | head'
+    ssh wiiu 'sudo installer -pkg "/Volumes/Xcode Tools/XcodeTools.mpkg" -target /'
+    ssh wiiu 'gcc-4.0 -v; ls /System/Library/Frameworks/Kernel.framework/Headers/IOKit/graphics'
+    ```
+    - Con Xcode ≥2.0 hay gcc 4.0, `ld`, `kextcache` y las cabeceras del kernel en `Kernel.framework` → suficiente para compilar kexts **en la propia Wii U**.
+    - Xcode 2.5 (última para Tiger PPC, 10.4.7+) mejora el SDK `MacOSX10.4u.sdk`; se descarga de developer.apple.com (cuenta gratuita, `xcode25_8m2558_developerdvd.dmg`) y se copia por `rsync --bwlimit` a la Wii U.
+    - Espacio: comprobar `df -h /` antes (Xcode ocupa ~1–2 GB).
+    - La instalación es lenta en Espresso/SD; hacerla una vez con `caffeinate` en el Mac.
+
+Con esto el flujo de compilación queda:
+```bash
+rsync -a --bwlimit=200 ./ wiiu:~/osx-drivers/
+ssh wiiu 'cd ~/osx-drivers && make OSX_VERSION=tiger CC=gcc-4.0 CXX=g++-4.0 DARLING_SHELL= LD=ld'
+```
+(requiere el ajuste de `common/kext.mk` descrito en 5.3: rutas de toolchain sin Darling y `-I` a `Kernel.framework/Headers` o a `MacPPCKernelSDK`).
+
+Próximos comandos informativos (solo lectura, seguros):
+```bash
+ssh wiiu 'df -h; diskutil list; ls "/Volumes/Xcode Tools"'
+ssh wiiu 'ioreg -p IODeviceTree -n gx2 -l -w0; ioreg -c WiiCafeFB -l -w0'
+ssh wiiu 'grep -i -E "wii|gx2|cafe|fb" /var/log/system.log | tail -50'
+ssh wiiu 'sysctl hw.ncpu hw.memsize hw.cpufrequency; nvram boot-args 2>/dev/null'
+```
+- `hw.ncpu` confirma si Wiintosh usa 1 o 3 núcleos de Espresso.
+- `hw.memsize` indica cuánta RAM usa Mac OS X (relevante para reservar zonas de MEM2: ring, log persistente).
