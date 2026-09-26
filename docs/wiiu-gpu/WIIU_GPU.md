@@ -23,8 +23,10 @@
 > - **Parte 22** — ✅ Instalación permanente verificada, Read, GetBeamPosition.
 > - **Parte 23** — MEM1 para la GPU, vblank, PR antes que SMP.
 > - **Parte 24** — ✅ MEM1 verificado; PR preparado.
-> - **Parte 25** — Revisión del PR, issue de SMP y **pasos para publicar**.
-> - Si algo se contradice, vale la parte **más reciente** (25 > 24 > 23 > …).
+> - **Parte 25** — Revisión del PR y pasos para publicar.
+> - **Parte 25b** — ✅ PR publicado: Wiintosh/osx-drivers#1.
+> - **Parte 26** — **SMP: investigación, plan por pasos (26.5) y texto del issue (26.6)**.
+> - Si algo se contradice, vale la parte **más reciente** (26 > 25b > 25 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -41,14 +43,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: Parte 25** (revisar y publicar el PR → issue de SMP → SMP núcleo 1).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: Parte 26** (abrir el issue de SMP → pasos 0–6 de la tabla 26.5).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -2106,3 +2108,143 @@ Orden recomendado:
 3. Abrir el PR contra `Wiintosh/osx-drivers:main` desde la web (o `gh pr create`).
 4. Después, abrir el issue de SMP (25.2) y enlazarlo.
 5. Seguir el PR: responder a Goldfish64 y adaptar a lo que pida.
+
+---
+
+# PARTE 25b — PR publicado (2026-09-27), resumen del Claude del Mac
+- **PR abierto:** https://github.com/Wiintosh/osx-drivers/pull/1 (fork `Rubanoxd/osx-drivers`, rama `gx2-accel`, autor Rubanoxd). 3 commits. Sin checks: el CI de upstream necesita aprobación para forks y usa un toolchain privado.
+- Instalado y verificado tras varios reinicios reales; 0 timeouts; WindowServer al ~44 % de CPU en **un solo núcleo** → siguiente frente: SMP.
+- `sudo` NOPASSWD en la Wii U: el humano decide dejarlo como está.
+
+---
+
+# PARTE 26 — SMP en Wiintosh: investigación y plan por pasos
+
+> Fuentes: xnu‑792.24.17 (`osfmk/ppc/cpu.c`, `start.s`, `lowmem_vectors.s`, `model_dep.c`), osx-drivers 0.5.2 (`WiiPlatform/src/PE/WiiCPU.cpp`, `Interrupts/*`), OpenBIOS Wiintosh (`arch/ppc/wii/init.c`, `macosx/xnu.c`) y NetBSD (`sys/arch/evbppc/nintendo/cpu.c`, `machdep.c`, `pic_pi.c`, `ipi_latte.c`, `powerpc/include/oea/spr.h`). Lo no comprobado en consola va marcado.
+
+## 26.1 Estado actual (núcleo 0)
+- `WiiCPU` **es un `IOCPU`**. `start()`:
+  1. Exige `WiiPE`.
+  2. Fija `_numCPUs = 1` (`// TODO: Only handle one CPU`).
+  3. Lee `reg` del nodo de CPU → `setCPUNumber`.
+  4. Marca `_isBootCPU = true` (la lectura de `state` no cambia nada).
+  5. Crea el `IOCPUInterruptController` con `initCPUInterruptController(_numCPUs)`.
+  6. Llama `ml_processor_register` con `start_paddr = 0x100`, `supports_nap = false`, `time_base_enable = NULL`, y después `processor_start`. **Solo si `physCPU < _numCPUs`.**
+- `initCPU(boot)`: si es boot, habilita la interrupción de CPU y registra `ipiHandler` en `cpuNub` interrupción 0; si no, `// TODO`. Pone `Running`.
+- `startCPU`, `haltCPU`, `quiesceCPU`: **vacíos** (`startCPU` devuelve `KERN_SUCCESS` sin hacer nada).
+- **`signalCPU` no está sobrescrito** → `IOCPU::signalCPU` base, que no hace nada.
+- `ipiHandler`: llama `ipi_handler()` sin mirar ningún registro.
+- OpenBIOS (`arch/ppc/wii/init.c` l.~329): define **una sola** CPU `PowerPC,Espresso` (en `ioreg` solo aparece `cpus/PowerPC,Espresso@0`).
+- Parche de CPU ya existente: `xnu_patch_cpu_check()` en OpenBIOS (`macosx/xnu.c` l.63–108) cambia en la **tabla `processor_types` de `__start`** la entrada del 750CX (máscara `0xFFFF0F00`, PVR `0x00080200`) por máscara `0xFFFF0000`, PVR `0x7001xxxx`. Así el Espresso usa `init750CX` → `init750`.
+
+## 26.2 Cómo arranca XNU un secundario (xnu‑792)
+1. `processor_start(proc)` → `cpu_start(cpu)` (`osfmk/ppc/cpu.c` l.287):
+   - Si `start_paddr == EXCEPTION_VECTOR(T_RESET)` (= 0x100), escribe con `ml_phys_write` en `ResetHandler` (memoria baja, dentro de los vectores en física 0): `RESET_HANDLER_START`, `_start_cpu` y `&PerProcTable[cpu]`.
+   - Guarda el timebase actual en `proc_info->ruptStamp`, `sync; isync`.
+   - Llama **`PE_cpu_start(cpu_id, start_paddr, proc_info)` → `IOCPU::startCPU`** (nuestra función).
+   - Luego **duerme hasta que el secundario ponga `SignalReady`** (`thread_sleep_simple_lock` sobre `cpu_flags`). No hay timeout visible en ese bucle: **si el secundario no llega, el arranque se queda colgado** en ese punto [comprobar si hay timeout más arriba].
+2. El secundario debe entrar en **modo real (MSR = 0, IP = 0) en la física 0x100**.
+   - `lowmem_vectors.s` l.59–90: el vector de reset lee `ResetHandler`; si es `RESET_HANDLER_START`, lo borra, carga `r4 = _start_cpu` y `r3 = &PerProcTable[cpu]` y salta.
+   - `_start_cpu` (`start.s` l.92) → `allstart` (l.144): recorre **la misma tabla `processor_types`** (ya parcheada por OpenBIOS) → `init750CX` → `init750`. Con `firstBoot` lee **L2CR** (si no es válido, desactiva la función L2) y fija HID0.
+   - **Por tanto el PVR de Espresso ya vale para los secundarios**; no hace falta otro parche [NO VERIFICADO: comprobar que `firstBoot` y la lectura de L2CR no fallan en los núcleos 1/2].
+3. El secundario inicializa su `per_proc`, llama `PE_cpu_machine_init` → **`IOCPU::initCPU(false)`**, activa interrupciones y pone `SignalReady`. Después, el maestro sincroniza el **timebase**: `cpu_sync_timebase()` (cpu.c l.687–) manda `cpu_signal(master, SIGPcpureq, CPRQtimebase)` → **necesita IPIs funcionando**. Como `time_base_enable = NULL`, el timebase se sincroniza por software con IPIs.
+4. Boot-arg **`cpus=N`**: `machine_startup()` (`model_dep.c` l.216) → `max_ncpus = N`; `cpu.c` l.267 rechaza registrar más CPU (`real_ncpus >= max_ncpus`). **`cpus=1` sí funciona como red de seguridad.**
+
+## 26.3 Hardware de Espresso para SMP (NetBSD)
+- **SPR de Espresso** (`oea/spr.h`): `HID5 = 944 (0x3B0)`, **`SCR = 947 (0x3B3)`**, `CAR = 948 (0x3B4)`, `BCR = 949 (0x3B5)`, `HID4 = 1011 (0x3F3)`, `HID2 = 920 (0x398)`.
+  - `SCR_WAKE(n) = 1 << (23 − n)`: despierta el núcleo n.
+  - `SCR_IPI_PEND(n) = 1 << (20 − n)`: IPI pendiente para el núcleo n. Se envía poniéndolo desde cualquier núcleo y se reconoce **en el núcleo destino** borrándolo **en bucle hasta leer 0** (`pic_pi.c` `pi_ipi_ack`).
+- **Configuración del núcleo de arranque en modo nativo Wii U** (`machdep.c` l.~415):
+  ```
+  HID5 |= H5A (0x80000000) | PIRE (0x40000000)       ; habilita HID5 y el registro PIR (id de núcleo)
+  SCR  = (SCR & ~0x40000000) | 0x80000000
+  CAR |= 0xFC100000
+  BCR  = 0x08000000
+  isync
+  ```
+  Esto se hace en el núcleo 0 **antes** de despertar los demás [NO VERIFICADO qué deja hecho ya el loader/OpenBIOS: leer HID5/SCR/CAR/BCR del núcleo 0 bajo Wiintosh con un kext antes de tocar nada].
+- **Trampolín** (`cpu.c` l.56–76), copiado a **`WIIU_BOOT_VECTOR = 0x08100100`** (MEM0) + `__syncicache`:
+  ```
+  lis r3,hi(entry); ori r3,r3,lo(entry); mtsrr0 r3
+  li  r3,0; mtsrr1 r3                          ; MSR = 0 → modo real, IP = 0
+  lis r3,0x0011; ori r3,r3,0x0024; mtspr 1008,r3   ; HID0
+  lis r3,0xb1b0;                  mtspr 1011,r3   ; HID4
+  sync
+  lis r3,0xe7fd; ori r3,r3,0xc000; mtspr 944,r3    ; HID5
+  sync
+  rfi
+  ```
+  Para XNU: **`entry = 0x100`** (vector de reset de XNU), sin pasar argumento: XNU lo coge de `ResetHandler`. `mtsrr1 0` garantiza IP = 0 → vectores en 0.
+- **Despertar:** `mtspr SCR, mfspr(SCR) | WAKE(n)`. NetBSD espera un "ack" del secundario con un bucle largo y deja un `printf` que, según su comentario, acelera el arranque "sin saber por qué" (probablemente un retardo o el efecto de un flush). Tenerlo en cuenta si el secundario tarda.
+- **Timebase en NetBSD:** el maestro publica `TB + 100000`, espera a llegar a ese valor, marca `running = 0`, y el secundario escribe TBL = 0, TBU, TBL. Solo hace falta si el método de XNU (IPIs) no funciona.
+- **Topología:** el núcleo 1 tiene L2 de 2 MB y los 0/2 de 512 KB (NetBSD marca 0 y 2 como "más lentos").
+- **Interrupciones por núcleo:** `PI INTSR(n) = 0x0C000078 + 8n`, `INTMSK(n) = 0x0C00007C + 8n`. Las IPIs **no pasan por el PI**: son la excepción externa del núcleo con `SCR_IPI_PEND(n)`. NetBSD, en cada excepción externa, mira primero `SCR_IPI_PEND(cpu)`: si está, lo reconoce y devuelve la "IRQ" software 20+n; si no, lee `INTSR(cpu) & mask`.
+
+## 26.4 Respuestas concretas a 25.2
+1. **Hoy:** ver 26.1. OpenBIOS solo crea el nodo del núcleo 0; `WiiCPU` es un `IOCPU` con SMP sin implementar.
+2. **Secuencia del núcleo 1:** 26.2. `ResetHandler`/`PerProcTable` los rellena **XNU** (`cpu_start`). Nosotros solo tenemos que poner el núcleo en modo real en 0x100. El PVR ya está parcheado en `processor_types`, que es la tabla que usa `allstart` también para los secundarios. Timebase: por IPIs (`CPRQtimebase`), con el método de NetBSD como alternativa.
+3. **Trampolín:** sí, el de NetBSD con `entry = 0x100`.
+   - `0x08100100` está en **MEM0** (3 MB en `0x08000000`, NetBSD `wiiu.h`). No está en `PhysicalDRAM` de XNU, así que hay que mapearlo con `IOMemoryDescriptor::withPhysicalAddress(0x08100000, 0x1000, kIODirectionInOut)` + `map(kIOMapInhibitCache)`, o usar `ml_phys_write`.
+   - **Antes de escribir, leer y registrar** lo que hay (lo puede estar usando el loader).
+   - Los HID del trampolín de NetBSD (HID0 `0x00110024`, HID4 `0xB1B00000`, HID5 `0xE7FDC000`) son los de su kernel; XNU vuelve a fijar HID0 en `init750`. Empezar con los mismos valores.
+4. **IPIs e interrupciones:**
+   - XNU llama `PE_cpu_signal(source, target)` → **`IOCPU::signalCPU(target)`** → implementar en `WiiCPU`: `SCR |= IPI_PEND(target->getCPUNumber())`.
+   - Recepción: la IPI llega como **excepción externa del núcleo destino** → XNU → `IOCPUInterruptController::handleInterrupt` con el vector de **ese** núcleo (`initCPUInterruptController(3)`) → `WiiCPU::ipiHandler` de ese núcleo. Ahí: si `SCR & IPI_PEND(yo)`, reconocerlo en bucle y llamar `ipi_handler()`. **Si no, en el núcleo 0 pasar al `WiiInterruptController`** (hoy el PI está colgado de la interrupción 0 del `cpuNub` del núcleo 0: comprobar el enlace exacto en `WiiInterruptController` / `WiiPE`).
+   - `WiiInterruptController` hoy usa `readCafeIntCause32(0)` fijo. **Primera versión:** dejar todos los dispositivos en el núcleo 0 y poner `INTMSK(1) = INTMSK(2) = 0` (los secundarios solo reciben IPIs). Así no hace falta hacerlo por núcleo todavía.
+5. **Caché y coherencia:**
+   - Espresso es coherente entre núcleos (NetBSD corre SMP con su pmap normal).
+   - Riesgo XNU: su código MP de PPC se escribió para G4/G5. Revisar que las instrucciones que usa para MP son válidas en Espresso: `tlbie` + `tlbsync` (difusión de TLB entre núcleos; ¿implementa el 750CL `tlbsync` y la difusión de `tlbie`? NetBSD usa la misma secuencia en `oea/pmap.c`), `lwarx/stwcx.` (sí), `icbi` difundido (necesario para código modificado).
+   - Las L2 son privadas por núcleo y coherentes por snooping. `init750` lee/sombrea L2CR por núcleo.
+   - No debería hacer falta nada especial [NO VERIFICADO: primer punto a mirar si hay corrupciones aleatorias].
+6. **Riesgos y recuperación:**
+   - `cpus=1` funciona (26.2). Probar primero **solo el núcleo 1** (registrar 2 CPU y dejar el 2 fuera, o `cpus=2`).
+   - Si el secundario no arranca: **cuelgue en `cpu_start`** esperando `SignalReady`, antes o durante el arranque de IOKit. Con `-v`, lo último en pantalla será el registro de `WiiCPU`. **Pedir foto de la pantalla.**
+   - Recuperación: en OpenBIOS `setenv boot-args "-v cpus=1"`.
+7. **Upstream:** issue antes de código (texto en 26.6).
+
+## 26.5 Plan por pasos (cada uno se prueba sin riesgo antes del siguiente)
+| # | Paso | Cómo probar | Si cuelga, pedir… |
+|---|---|---|---|
+| 0 | Kext de diagnóstico (solo lectura) en el núcleo 0: leer y registrar `PVR`, `HID0/2/4/5`, `SCR`, `CAR`, `BCR`, `L2CR`, `PIR` y el contenido de `0x08100100` (64 bytes) | carga en caliente | — |
+| 1 | Añadir en `WiiCPU` `signalCPU` + `ipiHandler` con SCR, **con 1 CPU**: un kext de prueba se manda una IPI a sí mismo (`SCR |= IPI_PEND(0)`) y comprueba que llega y se reconoce | carga en caliente; si hay tormenta de interrupciones, reiniciar | foto |
+| 2 | OpenBIOS: nodos `PowerPC,Espresso@1` y `@2` (`reg` 1/2, `state "stopped"`) — o crearlos desde `WiiPE`. `WiiCPU`: `_numCPUs = 3`, `initCPUInterruptController(3)`, registrar las 3 CPU pero **`startCPU` devuelve `KERN_FAILURE`** para los secundarios | arranque normal; `sysctl hw.ncpu` debe seguir en 1 (o 3 "no iniciados") y todo igual. Probar también `cpus=1` | foto con `-v` |
+| 3 | Aplicar en el núcleo 0 la configuración de NetBSD (HID5 H5A\|PIRE, SCR, CAR, BCR) si el paso 0 muestra que falta | arranque normal | foto |
+| 4 | `startCPU` real **solo para el núcleo 1**: escribir el trampolín (`entry = 0x100`), `flushDataCache` + `icbi`, `SCR |= WAKE(1)`. `initCPU(false)`: `INTMSK(1) = 0`, habilitar su vector del `IOCPUInterruptController`, `Running` | arrancar con **`-v cpus=2`**. Éxito = `hw.ncpu: 2`, `sysctl hw.activecpu` = 2, `top` repartiendo | **foto de la pantalla** (se colgará en `cpu_start` si el núcleo no llega) |
+| 5 | Estabilidad: compilar el repo en la Wii U con `make -j2`, dejarlo horas; vigilar el timebase (`date` frente al Mac) y los panics | uso real | panic.log / foto |
+| 6 | Núcleo 2 (`cpus=3`) | igual | foto |
+| 7 | Interrupciones por núcleo en `WiiInterruptController` (opcional; los dispositivos en el núcleo 0 bastan) | — | — |
+
+## 26.6 Texto propuesto del issue (inglés) para Goldfish64
+```
+Title: Proposal: SMP support on Wii U (Espresso cores 1 and 2)
+
+Hi! Following up on the GX2 PR (#1): with GPU compositing working, WindowServer
+is now CPU-bound (~44% of one core). Espresso has 3 cores and XNU 8.x PPC is
+MP-capable, so I'd like to propose SMP, and ask how you'd prefer it done
+before writing code.
+
+What I found (references):
+- NetBSD evbppc/nintendo (jmcneill, 2026) runs SMP on Wii U: cpu.c (secondary
+  trampoline at 0x08100100 setting HID0/HID4/HID5, woken via SCR SPR 947
+  WAKE(n)=1<<(23-n)), ipi_latte.c / pic_pi.c (IPIs via SCR IPI_PEND(n)=1<<(20-n),
+  acked on the target core), machdep.c (boot core: HID5 H5A|PIRE, SCR, CAR, BCR).
+- xnu-792 cpu_start() fills ResetHandler with _start_cpu/PerProcTable and calls
+  PE_cpu_start -> IOCPU::startCPU; the secondary enters at the reset vector
+  (0x100, real mode) and goes through allstart, which uses the processor_types
+  table that OpenBIOS already patches for Espresso. Timebase is synced over
+  IPIs (CPRQtimebase). The "cpus=N" boot-arg caps max_ncpus (safe fallback).
+
+Proposed changes:
+1. OpenBIOS: add PowerPC,Espresso@1/@2 nodes (or have WiiPE create them).
+2. WiiCPU: numCPUs=3; startCPU writes the trampoline (entry 0x100) and sets
+   SCR WAKE(n); signalCPU sets SCR IPI_PEND(n); ipiHandler acks it;
+   initCPU(false) masks all PI IRQs on secondaries (devices stay on core 0).
+3. Possibly per-core PI handling in WiiInterruptController later.
+
+Questions:
+- Would you rather have the CPU nodes in OpenBIOS or created by WiiPE?
+- Have you already tried SMP, or seen issues with tlbie/tlbsync or L2 on Espresso?
+- Any constraints on MEM0 (0x08100100) under wiiu-loader?
+
+I'd test step by step with "cpus=1/2" as fallback and report results here.
+```
