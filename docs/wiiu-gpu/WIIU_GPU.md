@@ -11,7 +11,10 @@
 > - **Parte 5** — Ejecutarlo todo desde Claude Code en el MacBook (SSH vía Redmi).
 > - **Partes 6–11** — Datos reales de la consola y su análisis.
 > - **Parte 12** — Proyectos similares (⭐ NetBSD Wii U) y qué aprovechar.
-> - **Parte 13** — Fe de erratas: **si algo se contradice, vale la Parte 13**.
+> - **Parte 13** — Fe de erratas.
+> - **Parte 14** — Resultados medidos en la Wii U (anillo, CP_DMA, plugin GA funcionando).
+> - **Parte 15** — Por qué el WindowServer no usa el plugin (faltan superficies CGS) y plan siguiente.
+> - Si algo se contradice, vale la parte **más reciente** (15 > 14 > 13 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -28,14 +31,16 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero la **Parte 13 (fe de erratas)**, luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Primeras tareas (en orden):**
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 15.6** (sample/Quartz Debug → instrumentar plugin → mapeo write-through → VBL → superficies CGS).
+
+**Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
 2. `ssh wiiu 'cat /System/Library/Frameworks/IOKit.framework/Headers/graphics/IOGraphicsInterface.h'` y guardar copia (vtable del plugin GA).
 3. `ssh wiiu 'sysctl hw.physmem hw.usermem'` (Parte 11.1).
