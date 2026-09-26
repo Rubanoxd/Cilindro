@@ -13,8 +13,10 @@
 > - **Parte 12** — Proyectos similares (⭐ NetBSD Wii U) y qué aprovechar.
 > - **Parte 13** — Fe de erratas.
 > - **Parte 14** — Resultados medidos en la Wii U (anillo, CP_DMA, plugin GA funcionando).
-> - **Parte 15** — Por qué el WindowServer no usa el plugin (faltan superficies CGS) y plan siguiente.
-> - Si algo se contradice, vale la parte **más reciente** (15 > 14 > 13 > …).
+> - **Parte 15** — Por qué el WindowServer no usa el plugin (faltan superficies CGS).
+> - **Parte 16** — Resultados tras la 15 (no hay write-through en xnu PPC; `sample` roto).
+> - **Parte 17** — Parche del bit W, interfaz exacta de superficies, muestreador y **plan actual (17.5)**.
+> - Si algo se contradice, vale la parte **más reciente** (17 > 16 > 15 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -31,14 +33,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 15.6** (sample/Quartz Debug → instrumentar plugin → mapeo write-through → VBL → superficies CGS).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 17.5** (experimento IOAccelTypes → parche del bit W → superficies con backing → muestreador → VBL).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -1677,3 +1679,111 @@ Viable pero **peor que 15.1/15.2**:
 | 6 | SMP (NetBSD) — proyecto aparte | semanas | alto | Rendimiento general |
 
 **Recomendación:** hacer 1 → 2 → 3 ya (baratos y dan datos); si 1–2 confirman que Tiger usaría superficies, invertir en 5, usando VMsvga2 como referencia de código y las cabeceras `IOAccelSurfaceConnect.h`/`IOAccelTypes.h` de la propia Wii U.
+
+---
+
+# PARTE 16 — Resultados de Claude Code tras la Parte 15 (2026-09-27)
+
+> Resumen de lo que envió el Claude del Mac (texto completo en su `docs/BITACORA.md`).
+- Confirmado: el WindowServer mapea el fb con `kIOMapDefaultCache` → I+G; el modo de caché lo decide quien mapea (`kIOMapUserOptionsMask = 0xFFF` incluye `kIOMapCacheMask`); el plugin GA arranca pero no recibe ni una llamada.
+- ❌ **No hay write‑through en xnu‑792 PPC:** `pmap_enter` y `pmap_map_block` convierten los flags a `mmFlgGuarded`/`mmFlgCInhib` y `mapping_make` solo pone I y G; **el bit W nunca se pone** → `kIOMapWriteThruCache` = copy‑back. Medido: leer 256 KB pasa de 12,3 ms a 0,27–1,69 ms con caché, pero las escrituras se quedan en caché (16 360/16 384 mal) y aparece basura al desalojar líneas.
+- ❌ `sample` y `vmmap` fallan (`NSCFArray insertObject:atIndex: nil`) y **dejan el WindowServer suspendido** (hay que reanudarlo con `task_resume`). No usar. No existen Quartz Debug ni Shark.
+- Base disponible: `WiiGX2Accel.kext` (CP, anillo, IB 0x32, fence EOP, user client CopyRects/FillRects/WaitIdle, `clientMemoryForType(0)` = fb), `WiiGX2GA.plugin` (copia/relleno, calidad 1000), `gx2ctl`.
+
+---
+
+# PARTE 17 — Respuestas a 16.5 (con el código de xnu‑792.24.17, IOKitUser‑277.8, IOGraphics‑193.2.2)
+
+## 17.1 (Pregunta 3) El parche del bit W es **pequeño y preciso** — hacerlo antes que las superficies
+Cadena confirmada en xnu‑792.24.17:
+- `osfmk/ppc/pmap.h`: `VM_WIMG_WTHRU = VM_MEM_WRITE_THROUGH | VM_MEM_COHERENT | VM_MEM_GUARDED` (W=0x8, M=0x2, G=0x1).
+- `osfmk/ppc/pmap.c` l.1096 (`pmap_enter`) y l.1146/1168 (`pmap_map_block*`): `mflags = mmFlgUseAttr | (flags & VM_MEM_GUARDED) | ((flags & VM_MEM_NOT_CACHEABLE) >> 1)` → **se pierde W**.
+- `osfmk/ppc/mappings.c` l.348–350 (`mapping_make`): `wimg = 0x2; if (pattr & mmFlgCInhib) wimg |= 0x4; if (pattr & mmFlgGuarded) wimg |= 0x1;` y l.369 `mp->mpVAddr = ... | (wimg << 3)`. `mpW = 0x40` existe en `mappings.h` (l.242) pero no se usa.
+
+**Firma única:** los modos de caché de PPC dan estos `pattr`:
+| Petición | `pattr` en `mapping_make` |
+|---|---|
+| `kIOMapInhibitCache` / `VM_WIMG_IO` | CInhib + Guarded |
+| `kIOMapWriteCombineCache` (`VM_WIMG_WCOMB` = I+M) | CInhib |
+| `kIOMapCopybackCache` / RAM normal | 0 |
+| **`kIOMapWriteThruCache` (`VM_WIMG_WTHRU`)** | **solo Guarded** |
+
+"Guarded sin CInhib" **solo** lo produce write‑through [comprobar con `grep` que ningún otro llamador pase `mmFlgGuarded` sin `mmFlgCInhib`]. Parche: en `mapping_make`, tras la línea 350, **si `pattr == mmFlgGuarded` → `wimg |= 0x8`** (W). Resultado: WIMG = W+M+G = 0b1011, válido en PPC; para todo lo demás no cambia nada.
+
+Dónde aplicarlo — **ya hay infraestructura**: `WiiPlatform/src/PE/WiiPE_Patcher.cpp` localiza la cabecera Mach‑O del kernel en tiempo de ejecución y su tabla de símbolos (`findKernelMachHeader`, usa `nlist`). Con eso:
+1. Buscar el símbolo `_mapping_make`.
+2. Localizar en su código la secuencia de las líneas 348–350 (desensamblar con `otool -tv -p _mapping_make /mach_kernel` en la Wii U para ver las instrucciones exactas: `li rX,2`, `rlwinm/andi.` del bit CInhib, `ori rX,rX,4`, bit Guarded, `ori rX,rX,1`).
+3. Sustituir por una secuencia equivalente que añada `ori rX,rX,8` cuando Guarded=1 y CInhib=0 (si no cabe en el hueco, saltar a un trampolín en memoria del kext y volver; hacer `dcbst`+`sync`+`icbi`+`isync` tras escribir).
+Alternativa sin tocar código: el parcheador de OpenBIOS (`arch/ppc/wii/macosx/xnu.c`, mismo mecanismo que `xnu_patch_io_bats`) antes de arrancar XNU — más seguro (antes de que haya mapeos), pero requiere reflashear OpenBIOS en la SD.
+
+Después del parche, el `WiiWTMemoryDescriptor` de 15.2 (forzar `kIOMapWriteThruCache` en mapeos por defecto del aperture) o simplemente pedirlo desde `gx2ctl cachebench` debería dar: lecturas con caché (0,3–1,7 ms / 256 KB) y **escrituras visibles** (W=1). Validar con el mismo `cachebench` (16 384/16 384 correctas).
+Con W=1 nunca hay líneas sucias → tras un blit de la GPU sobre el fb, `dcbf` (o `dcbi` en kernel) solo **invalida**: correcto. El plugin debe hacerlo sobre el rectángulo destino antes de devolver.
+
+Precedente: no hay registro de parchear el WIMG de xnu PPC; los Macs PPC nunca lo necesitaron (VRAM en tarjeta). El 750CL/Espresso implementa W por página (es arquitectura PowerPC estándar) [NO VERIFICADO en consola: lo dirá `cachebench`].
+
+**Por qué antes que el paso 5:** 1–2 días, reversible (se carga en caliente si se hace desde un kext; o se quita el parche), y ataca el cuello medido (lecturas del fb a ~20 MB/s) sin depender de lo que decida CGS.
+
+## 17.2 (Pregunta 2) Superficies CGS: interfaz exacta y experimento mínimo
+Llamadas exactas de `IOAccelSurfaceControl.c` (IOKitUser‑277.8) al user client de tipo `kIOAccelSurfaceClientType` (= 0):
+
+| Índice | Método | Llamada | Entrada / salida |
+|---|---|---|---|
+| 0 | ReadLockOptions | scalarI_structureO | in: `options` (1) · out: `IOAccelSurfaceInformation` |
+| 1 | ReadUnlockOptions | scalarI_scalarO | in: `options` (1) |
+| 2 | GetState | (no lo llama esta librería; lo usa CGS [NO VERIFICADO]) | out: estado (`kIOAccelSurfaceStateIdleBit`) |
+| 3 | WriteLockOptions | scalarI_structureO | in: `options` · out: `IOAccelSurfaceInformation` |
+| 4 | WriteUnlockOptions | scalarI_scalarO | in: `options` |
+| 5 | Read | structureI_structureO | in: `IOAccelSurfaceReadData {x,y,w,h, client_addr, client_row_bytes}` |
+| 6 | SetShapeBacking | scalarI_structureI | in: `options, fbIndex, backing (VA del cliente), rowbytes` (4) + `IOAccelDeviceRegion` |
+| 7 | SetIDMode | scalarI_scalarO | in: `wid, modebits` (2) |
+| 8 | SetScale | scalarI_structureI | in: `options` + `IOAccelSurfaceScaling` |
+| 9 | SetShape | scalarI_structureI | in: `options, fbIndex` (2) + `IOAccelDeviceRegion` |
+| 10 | Flush | scalarI_scalarO | in: `framebufferMask, options` (2) |
+| 11 | QueryLock | scalarI_scalarO | sin argumentos |
+| 12 | ReadLock | scalarI_structureO | out: `IOAccelSurfaceInformation` |
+| 13 | ReadUnlock | scalarI_scalarO | — |
+| 14 | WriteLock | scalarI_structureO | out: `IOAccelSurfaceInformation` |
+| 15 | WriteUnlock | scalarI_scalarO | — |
+| 16 | Control | scalarI_scalarO | in: `selector, arg` (2) · out: `result` (1) |
+| 17 | SetShapeBackingAndLength | scalarI_structureI | in: `options, fbIndex, backing, rowbytes, backingLength` (5) + región; si devuelve `kIOReturnUnsupported`/`BadArgument`, la librería reintenta con el 6 |
+
+Estructuras (IOGraphics‑193.2.2, `IOAccelTypes.h`/`IOAccelSurfaceConnect.h`): `IOAccelDeviceRegion {UInt32 num_rects; IOAccelBounds bounds; IOAccelBounds rect[]}` con `IOAccelBounds {SInt16 x,y,w,h}`; `IOAccelSurfaceInformation {vm_address_t address[4]; UInt32 rowBytes, width, height, pixelFormat; IOOptionBits flags; IOFixed colorTemperature[4]; UInt32 typeDependent[4]}`.
+
+**Hallazgo clave: `SetShapeBacking(AndLength)`.** El WindowServer puede pasar **su propio backing store en RAM** (`backing` = dirección virtual en su tarea + `rowbytes`). O sea, la superficie no tiene por qué vivir en memoria del driver: el kernel envuelve ese buffer (`IOMemoryDescriptor::withAddress(backing, len, kIODirectionOut, task)` + `prepare()` → páginas físicas) y en `Flush` lo copia al fb con CP_DMA (una orden por tramo físico contiguo de cada fila, o por página), tras `dcbst` del rango (el buffer es copy‑back en el WindowServer). Esto es justamente el volcado de ventanas que hoy hace la CPU escribiendo al fb sin caché.
+
+**Qué hace CGS si algo falla:** CoreGraphics es cerrado; no hay código que lo confirme [NO VERIFICADO]. Por diseño debería volver a software si `IOAccelFindAccelerator` o `IOAccelCreateSurface` fallan (es lo que pasa hoy sin `IOAccelTypes`).
+
+**Experimento mínimo (sin riesgo real), antes de implementar nada:**
+1. Clase `WiiGX2Accelerator : IOAccelerator` en `WiiGX2Accel.kext`; en `start()`: `getPath(buf, &len, gIOServicePlane)` y `WiiCafeFB->setProperty("IOAccelTypes", buf)` + `setProperty("IOAccelIndex", 0)`. Quitarlas en `stop()`.
+2. `newUserClient(task, sec, type, ...)`: **registrar con IOLog `type`, el proceso y devolver `kIOReturnUnsupported`** (o un user client que registre cada selector y sus argumentos y devuelva `kIOReturnUnsupported`).
+3. `killall loginwindow` con el kext cargado y SSH abierto; mirar syslog.
+   - Si aparece `type 0` desde WindowServer → CGS **sí** usa superficies sin QE → invertir en el paso 5 con `SetShapeBacking` + `Flush`.
+   - Si no aparece nada → CGS de 10.4 no usa superficies sin QE en este hardware; abandonar el paso 5 y quedarse con 17.1.
+   - Si el escritorio no vuelve → descargar el kext por SSH y `killall loginwindow` otra vez.
+
+## 17.3 (Pregunta 1) Medir el WindowServer sin `sample`
+- **No arreglar `sample`**: usa el framework privado de símbolos (vmutils) de 10.4; el `nil` probablemente viene de una región o imagen que no reconoce. No compensa.
+- **Muestreador propio** (el que propuso el Claude del Mac) — viable y sencillo en 10.4:
+  - `task_for_pid(WindowServer)` (root), `task_threads`, y en bucle cada ~1 ms `thread_get_state(PPC_THREAD_STATE)` → `srr0` (PC) y `r1` (pila). **Sin `thread_suspend`** (evita repetir el congelado; el estado puede ser ligeramente inconsistente, suficiente para estadística).
+  - Pila: en PPC el marco es `[r1+0] = marco anterior`, `[r1+8] = LR guardado` (ABI de Darwin 32‑bit); leer con `vm_read_overwrite` 3–5 niveles.
+  - Símbolos: en 10.4 los frameworks del sistema viven en la región compartida **pre‑enlazada a direcciones fijas** (prebinding), así que `nm -n /System/Library/Frameworks/ApplicationServices.framework/Frameworks/CoreGraphics.framework/CoreGraphics` da direcciones absolutas utilizables sin desplazamiento [NO VERIFICADO: comparar con una dirección conocida, p. ej. `dlsym` de `CGSMainConnectionID` en un proceso de prueba].
+  - Histograma por función → ver si domina la composición que lee el fb.
+- `gdb -p <pid>` (Xcode 2.4 trae gdb) con `bt` ~20 veces es la alternativa manual; `gdb` no usa vmutils. Hacer `detach` siempre.
+- Alternativas indirectas: `top -l 0 -s 1 -stats pid,cpu,command` (CPU del WindowServer al arrastrar), `sc_usage WindowServer` y `fs_usage -w -f cachehit` (llamadas al sistema).
+
+## 17.4 (Pregunta 4) `dcbf` de todo el fb por vblank — no
+- 3,6 MB / 32 B = 115 200 `dcbf` por frame. Las líneas limpias cuestan pocos ciclos (≈ 1 ms por frame a 1,24 GHz, estimado); las sucias se escriben igual que ahora pero en ráfagas de 32 B. Parece barato, pero:
+  - Las escrituras de la CPU serían invisibles hasta 16 ms y cualquier desalojo natural de una línea sucia ya pinta en cualquier momento (es lo que causó la tira de basura).
+  - La GPU y la CPU se pisarían (la GPU escribe; luego un `dcbf` de una línea sucia antigua la machaca), justo lo medido en 16.2.
+  - `dcbf` desde el kernel debe hacerse sobre un mapeo **cacheable** del mismo físico (las cachés del 750 están etiquetadas por dirección física; sobre un mapeo I=1 el comportamiento no es fiable).
+- Con el parche de 17.1 (W=1) no hay líneas sucias y todo esto sobra.
+
+## 17.5 Plan actualizado (sustituye a la tabla 15.6)
+| # | Tarea | Coste | Riesgo | Decide |
+|---|---|---|---|---|
+| 1 | Experimento `IOAccelTypes` + registro de `newUserClient` (17.2) | horas | bajo | ¿CGS usa superficies sin QE? |
+| 2 | Parche W en `mapping_make` (17.1) + validar con `cachebench` + plugin con `dcbf` tras blits | 1–2 días | medio (kernel; reversible) | Lecturas del fb con caché y escrituras visibles |
+| 3 | Si 1 = sí: superficies con `SetShapeBacking` + `Flush` por CP_DMA (17.2) | 1–2 semanas | medio | Volcado de ventanas por GPU |
+| 4 | Muestreador propio (17.3) | 1 día | bajo | Dónde gasta el WindowServer tras 2/3 |
+| 5 | `GetBeamPosition` + VBL (IRQ 23) | 1–2 días | bajo | Beam sync |
+| 6 | SMP (NetBSD) | semanas | alto | Rendimiento general |
