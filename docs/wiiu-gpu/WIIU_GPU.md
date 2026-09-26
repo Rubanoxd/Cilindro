@@ -1280,3 +1280,59 @@ Si hiciera falta el árbol completo: instalar un `ioreg` más nuevo no es posibl
 1. Salidas de 9.1.
 2. Salida del comando de cabeceras de 9.2.
 3. Resultado de la compilación de prueba de 9.2 (primer paso real).
+
+---
+
+# PARTE 10 — Quinta salida: nodo gx2 y WiiCafeFB reales (2026-09-26)
+
+> Solo investigación. No se ha ejecutado nada en la consola más allá de lecturas.
+
+## 10.1 Nodo OpenBIOS `gx2@c200000` (confirmado)
+| Propiedad | Valor | Significado |
+|---|---|---|
+| `reg` | `0c200000 00080000 8f000000 00384000` | MMIO 512 KB + framebuffer TV |
+| `IODeviceMemory` | `{0xc200000,0x80000}`, `{0xffffffff8f000000,0x384000}` | índice 0 = registros, índice 1 = VRAM. La dirección `0xffffffff8f000000` es `0x8F000000` con extensión de signo al imprimirse como 64 bits; al usarla como `IOPhysicalAddress` (32 bits) es correcta |
+| `AAPL,vram-memory` | `8f000000 00384000` | 0x384000 = 1280×720×4 exactos → **no hay VRAM sobrante** declarada |
+| `interrupts` | `2`, padre `interrupt-controller@c000000` | Línea 2 del controlador de Espresso (PI), gestionado por `WiiInterruptController`. Es la vía para las IRQ de GPU (fase 1.4/2) |
+| `width/height/depth/linebytes` | `0x500`/`0x2d0`/`0x20`/`0x1400` | 1280×720, 32 bpp, 5120 bytes por línea |
+| `AAPL,boot-display` | presente | Es la pantalla de arranque |
+| `address` | `8f000000` | usado por BootX para la consola |
+
+Consecuencias:
+- **Doble búfer / page flip (fase 1.3)** necesita una segunda superficie: no cabe en `0x384000`. Opciones: reservar otra zona física contigua con `IOBufferMemoryDescriptor` (kIOMemoryPhysicallyContiguous, 3.6 MB — puede fallar tras mucho uptime; hacerlo en `start()`), o ampliar el `reg` en OpenBIOS/wiiu-loader (p. ej. `0x8F000000` + `0x800000`) comprobando que no pisa el D2 en `0x8FE00000`.
+- **GamePad (D2)** en `0x8FE00000` no aparece en el árbol: habría que añadirlo como `reg` extra (índice 2) si se retoma.
+
+## 10.2 `WiiCafeFB` en ejecución
+- `IOFBConfig.IOFBModes` = un único modo ID 1, `DM` = 1280×720 @ 60 Hz (`0x003c0000`), flags `DF=0x3`.
+- `IOFBMemorySize = 0x384000`.
+- `IOFBCursorInfo`: cursor hardware 32×32, 32 bpp → el cursor HW funciona.
+- `IOFramebufferOpenGLIndex = 0`, `IOFBTransform = 0`.
+- Hijos: `display0 (IODisplayConnect)` → `AppleDisplay`; `IOFramebufferUserClient` (el WindowServer).
+- **No tiene** `IOCFPlugInTypes` → hoy no hay plugin 2D; en la fase 3 se añadirá esa propiedad (en el Info.plist de la personalidad o con `setProperty` en `start()`).
+
+## 10.3 Corrección sobre `IOAccelerationUserClient`
+Está colgado de **`IODisplayWrangler`**, no de un acelerador: es el cliente genérico que usa el WindowServer para pedir IDs de acelerador (`IOAccelerator::createAccelID`). Es normal en cualquier Mac y **no** indica que el WindowServer esté buscando aceleración. (Corrige lo dicho en 8.3.)
+
+## 10.4 Red y USB
+- El Redmi aparece como dispositivo USB **"Fedora rescate"** en `usb@d050000` (mismo controlador OHCI que el receptor de teclado/ratón "USB Receiver"), con `AppleUSBCDC` + `AppleUSBCDCECMControl` + `AppleUSBCDCECMData` → `IOEthernetInterface`. Confirmado: driver ECM nativo de Tiger.
+- Compartir OHCI (USB 1.1, 12 Mbit/s) con el teclado/ratón: transferencias grandes pueden hacer lenta la entrada; otra razón para `--bwlimit`.
+- `usb@d130000` libre (puerto frontal): se podría mover el Redmi ahí para separarlo del teclado **[recomendación, NO VERIFICADO qué puerto físico es]**.
+
+## 10.5 Cabeceras disponibles en la Wii U
+`/System/Library/Frameworks/Kernel.framework/Headers/IOKit/graphics/`: `IOAccelClientConnect.h`, `IOAccelSurfaceConnect.h`, `IOAccelTypes.h`, `IOAccelerator.h`, `IODisplay.h`, `IOFramebuffer.h`, `IOFramebufferShared.h`, `IOGraphicsDevice.h`, `IOGraphicsEngine.h`, `IOGraphicsInterfaceTypes.h`, `IOGraphicsTypes.h` → **suficiente para compilar kexts gráficos en la propia Wii U** (mismas que `MacPPCKernelSDK`).
+- `IOGraphicsInterface.h` (la del plugin GA, espacio de usuario) no está ahí: buscarla en `/System/Library/Frameworks/IOKit.framework/Headers/graphics/`. Es la fuente buena para el orden exacto de la vtable (duda 7 de la Parte 2):
+  ```bash
+  ssh wiiu 'ls /System/Library/Frameworks/IOKit.framework/Headers/graphics/; cat /System/Library/Frameworks/IOKit.framework/Headers/graphics/IOGraphicsInterface.h'
+  ```
+- Receipts instalados: `BSDSDK`, `DevSDK`, `DevToolsSystem`, `OpenGLSDK`, `X11SDK`, `gcc3.3`, `gcc4.0`. **No** está `MacOSX10.4.Universal` (por eso no hay `/Developer/SDKs`); no hace falta para kexts ni para el plugin (se compila contra el sistema).
+
+## 10.6 Estado de las dudas abiertas
+| Duda | Estado |
+|---|---|
+| Registros MMIO y VRAM del nodo | ✅ Resuelta (10.1) |
+| Línea de interrupción | ✅ Línea 2 del PI de Espresso |
+| Toolchain en la Wii U | ✅ gcc 4.0.1 + cabeceras de Kernel.framework |
+| Orden de la vtable GA | ⏳ leer `IOGraphicsInterface.h` de IOKit.framework en la Wii U |
+| CP vivo / microcódigo | ⏳ sonda fase 0 |
+| Memoria libre para anillo/2º búfer | ⏳ revisar `WiiPE` y probar `IOBufferMemoryDescriptor` contiguo |
+| Vanilla con Wiintosh | ⏳ prueba en consola |
