@@ -971,3 +971,150 @@ Script `~/bin/pixel-ver.sh`: captura + foto, las guarda en `~/bitacora/` y las e
 2. ¿Android mantiene el Bluetooth PAN/adb mientras Vanilla ocupa la Wi-Fi?
 3. ¿`screencap` captura el vídeo de Vanilla (decodificado por hardware) o sale negro?
 4. ¿Se puede navegar Aroma solo con toques/teclas enviados por adb?
+
+---
+
+# PARTE 5 — Ejecutarlo todo desde Claude Code en el MacBook
+
+> Cambio de topología: Claude Code corre en el **MacBook**; entra por SSH al
+> **Redmi (Miatoll, Fedora 44)** y, a través de él, a la **Wii U (Tiger)** y al
+> **Pixel 6a** (adb). Esta parte sustituye a "Claude en el Miatoll" de las
+> partes anteriores; todo lo demás sigue valiendo.
+
+## 5.1 Topología
+```
+MacBook (Claude Code) ──Wi‑Fi LAN / SSH──► Redmi Miatoll (Fedora) ──usb0 CDC‑ECM──► Wii U (Tiger, sshd)
+                                              │
+                                              └─Bluetooth PAN / adb──► Pixel 6a (Vanilla + cámara)
+MacBook (opcional) ─► VM QEMU con Mac OS X 10.4 PPC + Xcode 2.5 (compilación)
+```
+Ventajas: el Mac tiene más CPU, disco y red; el Redmi solo hace de puente. Si el Mac duerme, la sesión se para: `caffeinate -dis` mientras trabaja Claude.
+
+## 5.2 SSH: Mac → Redmi → Wii U
+En el Redmi (una vez): `sudo dnf install -y openssh-server && sudo systemctl enable --now sshd`, usuario `claude` con tu clave pública del Mac en `~/.ssh/authorized_keys`, y `PasswordAuthentication no`.
+
+`~/.ssh/config` del **Mac**:
+```
+Host redmi
+    HostName <IP del Redmi en tu Wi‑Fi>      # o redmi.local si hay mDNS (avahi)
+    User claude
+    IdentityFile ~/.ssh/id_ed25519
+    ServerAliveInterval 15
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 10m
+
+Host wiiu
+    HostName <IP de la Wii U en usb0>
+    User <usuario de Tiger>
+    ProxyJump redmi
+    IdentityFile ~/.ssh/id_rsa_wiiu
+    KexAlgorithms +diffie-hellman-group-exchange-sha1,diffie-hellman-group14-sha1
+    HostKeyAlgorithms +ssh-rsa
+    PubkeyAcceptedAlgorithms +ssh-rsa
+    MACs +hmac-sha1
+    ServerAliveInterval 15
+```
+Clave: con `ProxyJump`, **el que negocia con Tiger es el ssh del Mac**, no el de Fedora. macOS no tiene crypto-policies, así que las opciones `+ssh-rsa` bastan y **no hace falta** relajar SHA‑1 en Fedora (`DEFAULT:SHA1` solo si alguna vez se hace ssh a Tiger desde el Redmi). Generar en el Mac `ssh-keygen -t rsa -b 3072 -f ~/.ssh/id_rsa_wiiu` (Tiger no admite ed25519).
+
+Comprobaciones:
+```bash
+ssh redmi 'ip -br addr; uname -a'
+ssh wiiu 'sw_vers; uname -a'
+rsync -av --bwlimit=200 -e ssh ./build/ wiiu:~/wiiu-test/     # límite por el issue #13
+```
+Si falla la negociación: `ssh -vvv wiiu`. Si el OpenSSH del Mac ya no incluye algún algoritmo antiguo **[NO VERIFICADO para la versión de macOS instalada]**, alternativa: `brew install openssh` o hacer el último salto desde el Redmi con `DEFAULT:SHA1`.
+
+Posibles problemas del Redmi: IP cambiante (reservar DHCP o usar `redmi.local` con `avahi`), firewall (`sudo firewall-cmd --add-service=ssh --permanent`), suspensión del móvil (desactivar suspensión: `sudo systemctl mask sleep.target suspend.target`).
+
+## 5.3 Dónde compilar (todas las opciones)
+| Opción | Cómo | Pros | Contras |
+|---|---|---|---|
+| **A. VM QEMU PPC en el Mac** (recomendada) | `brew install qemu`; `qemu-system-ppc -M mac99,via=pmu -m 1024 -hda tiger.qcow2 ...`; instalar Tiger 10.4.x + **Xcode 2.5** (requiere 10.4.7+, en la VM se puede actualizar a 10.4.11 sin afectar a la Wii U) | Compilador nativo PPC de Apple; rápido de iterar; no se cuelga la Wii U para compilar | Hay que instalar Tiger en QEMU (guías de E-Maculation); el disco de la VM se comparte por SSH/`rsync` (activar "Sesión remota" también en la VM y usar red `-netdev user,hostfwd=tcp::2222-:22`) |
+| B. En la propia Wii U | Xcode Tools del DVD de Tiger 10.4.0 (gcc 4.0) | Mismo sistema que el destino | Lento; si la Wii U está colgada no se compila; Xcode 2.5 no instala en 10.4.0 |
+| C. Linux x86_64 + Darling + Xcode 3 (lo que usa el CI oficial) | VM Linux en el Mac (en Apple Silicon, emulada) | Es la ruta "oficial" | Los binarios de Xcode 3 del CI están en un repo privado; hay que conseguirlos tú; Darling no corre en ARM ni en macOS |
+| D. Mac PPC real con Xcode 2.5/3.1 | — | Fiable | Hardware extra |
+| E. Solo comprobación de sintaxis | `clang++ -target powerpc-unknown-linux-gnu -fsyntax-only ...` (ver Parte 2) en el Mac o el Redmi | Instantáneo | No produce binarios; ABI distinto |
+
+Adaptar `common/kext.mk` para A/B/D: `CC=gcc-4.0 CXX=g++-4.0 LD=ld`, quitar `$(DARLING_SHELL)`, añadir `-arch ppc`, SDK: `-isysroot /Developer/SDKs/MacOSX10.4u.sdk` o las cabeceras de `MacPPCKernelSDK`. El `.mkext` se genera con `python3 make-mkext.py` en el Mac (`pip3 install pylzss`).
+
+La VM QEMU también sirve para **probar lógica que no toca hardware** (plugin GA cargando, parsers, `gx2ctl` sin GPU). El kext de la GPU **solo** se prueba en la Wii U.
+
+Flujo completo desde el Mac:
+```bash
+# 1. editar en el fork (Mac) → 2. compilar en la VM
+rsync -a ./ tigervm:~/osx-drivers/ && ssh tigervm 'cd ~/osx-drivers && make OSX_VERSION=tiger'
+# 3. traer el kext y empaquetar
+rsync -a tigervm:~/osx-drivers/WiiGraphics/build_kext_tiger/ ./out/
+python3 make-mkext.py out/Kexts out/Wii_tiger.mkext
+# 4. subir a la Wii U (partición BOOT montada en Tiger) y reiniciar
+rsync --bwlimit=200 out/Wii_tiger.mkext wiiu:~/wiiu-test/ && ssh wiiu 'sudo /usr/local/sbin/wiiu-kext install ~/wiiu-test/Wii_tiger.mkext'
+```
+
+## 5.4 Pixel 6a desde el Mac
+- adb en el Mac (`brew install android-platform-tools`) hablando con el adb del Pixel a través del Redmi:
+  ```bash
+  ssh -N -L 5555:<IP-del-Pixel-en-BT-PAN>:5555 redmi &   # túnel
+  adb connect 127.0.0.1:5555
+  adb exec-out su -c 'screencap -p' > vanilla.png
+  ```
+- Alternativa si el Pixel está cerca del Mac: adb por USB directamente al Mac (lo más fiable), o adb por Wi‑Fi si Android mantiene la red normal mientras Vanilla usa la radio **[NO VERIFICADO]**.
+- Claude Code en el Mac puede **leer las imágenes** (capturas y fotos de la TV) directamente.
+
+## 5.5 Avisos al humano desde el Mac
+En `~/.claude/settings.json` del Mac:
+```json
+{
+  "hooks": {
+    "Notification": [ { "hooks": [ { "type": "command",
+      "command": "osascript -e 'display notification \"Claude necesita tu atención (Wii U)\" with title \"Wiintosh\" sound name \"Glass\"'; ~/bin/avisar.sh accion 'Claude te necesita'" } ] } ],
+    "Stop": [ { "hooks": [ { "type": "command",
+      "command": "osascript -e 'display notification \"Turno terminado\" with title \"Wiintosh\"'" } ] } ]
+  }
+}
+```
+- `say "La Wii U te necesita"` para aviso por voz en el Mac.
+- `~/bin/avisar.sh` (ntfy, Parte 3) funciona igual en macOS (usa `curl`).
+- El **latido** (`wiiu-latido.sh`) mejor en el **Redmi** (siempre encendido y pegado a la Wii U), avisando por ntfy; así funciona aunque el Mac duerma.
+
+## 5.6 Permisos de Claude Code en el Mac
+`.claude/settings.json` del fork, para no pedir permiso en cada comando rutinario:
+```json
+{ "permissions": { "allow": [
+  "Bash(ssh wiiu tail:*)", "Bash(ssh wiiu cat /var/log/*)", "Bash(ssh redmi ip:*)",
+  "Bash(rsync:*)", "Bash(make:*)", "Bash(python3 make-mkext.py:*)",
+  "Bash(adb exec-out:*)", "Bash(adb pull:*)"
+] } }
+```
+Mantener **con confirmación**: cualquier `ssh wiiu sudo ...`, cargas de kext, reinicios y cortes de corriente.
+
+## 5.7 Seguridad
+- Nada expuesto a internet: todo es LAN (Mac↔Redmi) + USB/Bluetooth. No abrir puertos en el router.
+- Tiger (sshd de 2005) solo accesible a través del Redmi. En el Redmi, `firewalld` permitiendo ssh solo desde la LAN.
+- En Tiger, sudo limitado al script `wiiu-kext` (Parte 3).
+- El tema de ntfy es secreto; no subirlo al repo.
+- No subir microcódigo ni firmware de Nintendo.
+
+## 5.8 Todas las posibilidades evaluadas (resumen)
+| Posibilidad | Veredicto |
+|---|---|
+| VPN hacia la sesión de Claude en la nube | No: esa sesión solo sale por HTTPS vía proxy |
+| Claude Code en el Redmi + Remote Control | Válido (partes 1–3) |
+| **Claude Code en el Mac + SSH vía Redmi** | **Recomendado ahora** |
+| Tailscale en el Redmi (subnet router) | Útil para ti fuera de casa; innecesario en LAN |
+| Compilar: VM QEMU Tiger / Wii U / Darling / Mac PPC | QEMU recomendado (5.3) |
+| Ver la TV: cámara del Pixel | Recomendado |
+| Ver la TV: capturadora HDMI USB en el Mac | Alternativa muy buena si tienes una (UVC, `ffmpeg -f avfoundation`); imagen limpia sin cámara |
+| Ver GamePad: Vanilla en Pixel | Solo en Aroma probablemente (Parte 4) |
+| Logs: syslog por SSH / IPC Starbuck / MEM2 persistente / serie | Por orden de facilidad (Parte 3) |
+| kdp (depurador de kernel por red) | Descartado (sin driver Ethernet compatible) |
+| Reinicio automático: enchufe inteligente + autoarranque Aroma + Vanilla | Posible, con confirmación humana |
+
+## 5.9 Checklist de arranque (orden)
+1. [ ] sshd en el Redmi y `ssh redmi` desde el Mac.
+2. [ ] "Sesión remota" en Tiger y `ssh wiiu` (ProxyJump) funcionando.
+3. [ ] VM QEMU con Tiger + Xcode 2.5 y compilación del `osx-drivers` sin cambios (debe dar el mismo resultado que la release 0.5.2).
+4. [ ] mkext bueno de respaldo en la SD.
+5. [ ] ntfy + hooks del Mac + latido en el Redmi.
+6. [ ] Pixel: Vanilla en Aroma, adb vía Redmi, foto de la TV.
+7. [ ] Fase 0 (sonda) → anotar en `docs/BITACORA.md`.
