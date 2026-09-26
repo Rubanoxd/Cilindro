@@ -25,8 +25,10 @@
 > - **Parte 24** — ✅ MEM1 verificado; PR preparado.
 > - **Parte 25** — Revisión del PR y pasos para publicar.
 > - **Parte 25b** — ✅ PR publicado: Wiintosh/osx-drivers#1.
-> - **Parte 26** — **SMP: investigación, plan por pasos (26.5) y texto del issue (26.6)**.
-> - Si algo se contradice, vale la parte **más reciente** (26 > 25b > 25 > …).
+> - **Parte 26** — SMP: investigación y texto del issue (26.6).
+> - **Parte 27** — SMP paso 0: registros del núcleo 0 y MEM0.
+> - **Parte 28** — ⚠️ El controlador de CPU bloquea hasta arrancar todos los núcleos; prueba de IPI en caliente; **plan SMP revisado (28.6)**.
+> - Si algo se contradice, vale la parte **más reciente** (28 > 27 > 26 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -43,14 +45,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: Parte 26** (abrir el issue de SMP → pasos 0–6 de la tabla 26.5).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 28.6** (pruebas A/B de IPI en caliente → WiiPlatform con -wiismp → núcleo 1).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -2248,3 +2250,112 @@ Questions:
 
 I'd test step by step with "cpus=1/2" as fallback and report results here.
 ```
+
+---
+
+# PARTE 27 — SMP paso 0 (2026-09-27), resumen del Claude del Mac
+- Kext `WiiSMPProbe` (solo lectura, en caliente). **HID4 = SPR 1011** (`IBM750CL_SPR_HID4` de NetBSD; ojo: `SPR_HID4 = 0x3F4` de `oea/spr.h` es el del 970). BCR no se lee (NetBSD solo lo escribe).
+- Núcleo 0 bajo Tiger:
+
+| Registro | Valor | Comparación con NetBSD |
+|---|---|---|
+| PVR | `0x70010201` | |
+| HID0 | `0x0011C064` | |
+| HID4 | `0x80000000` | |
+| HID5 | `0x80000000` | **sin PIRE** |
+| SCR | `0x80000000` | coincide |
+| CAR | `0x00000000` | NetBSD hace `\|= 0xFC100000` |
+| L2CR | `0x80000000` | |
+
+  `hw.ncpu = hw.activecpu = 1`.
+- MEM0 `0x08100100` contiene `li r3,0x40; mtmsr r3; isync; b 0x08000110` (stub previo del loader/IOSU); el resto está a cero.
+- Issue de SMP redactado por el Claude del Mac (no le llegó el texto de 26.6); pendiente de permiso.
+- Pregunta: ¿se puede probar la auto-IPI en caliente sin reemplazar `WiiCPU` (que va en el mkext)?
+
+---
+
+# PARTE 28 — Respuestas a la Parte 27 y **corrección importante al plan 26.5**
+
+## 28.1 ⚠️ Corrección: el `IOCPUInterruptController` bloquea hasta que arrancan TODOS los núcleos
+xnu‑792 `iokit/Kernel/IOCPU.cpp`:
+- `initCPUInterruptController(sources)`: `numCPUs = sources`, reserva `vectors[numCPUs]` y llama **`ml_init_max_cpus(numCPUs)`**.
+- `enableCPUInterrupt(cpu)` (la llama cada `initCPU`): `ml_install_interrupt_handler(cpu, cpuNumber, this, handleInterrupt)`, `enabledCPUs++`, y `thread_wakeup` cuando `enabledCPUs == numCPUs`.
+- **`registerInterrupt(...)`: si `enabledCPUs != numCPUs` → `assert_wait` + `thread_block`.** Quien registre una interrupción en el controlador de CPU **se duerme hasta que todos los núcleos declarados hayan hecho `initCPU`.**
+- `handleInterrupt(source)`: `source` = número del núcleo que recibió la excepción externa → llama al `vectors[source]` registrado.
+
+Cómo está cableado hoy (osx-drivers 0.5.2):
+- `WiiInterruptController::start` (PI) hace `getPlatform()->setCPUInterruptProperties(provider)` (especificadores 0…numCPUs‑1 hacia `IOPlatformInterruptController`) y **`provider->registerInterrupt(0, …)`** → el PI ocupa el **vector 0** (excepción externa del núcleo 0).
+- `WiiCPU::initCPU(true)` intenta `cpuNub->registerInterrupt(0, ipiHandler)`. El nodo de CPU de OpenBIOS no tiene `interrupts`, así que probablemente falla en silencio (y si no, chocaría con el PI en el vector 0 → `NoResources`). Hoy `ipiHandler` **no está conectado a nada** [comprobar en el log de arranque].
+
+**Consecuencias para el plan:**
+1. **El paso 2 de 26.5 tal como estaba colgaría el arranque.** Con `initCPUInterruptController(3)` y los secundarios sin arrancar, el `registerInterrupt(0)` del PI se queda esperando para siempre → sin USB, sin SD, sin nada.
+2. **`numCPUs` del controlador de CPU debe ser exactamente el número de núcleos que van a arrancar**: `min(3, cpus=N, modo SMP activado)`. Con `cpus=1` o sin el boot-arg de SMP → `initCPUInterruptController(1)`, como hoy.
+3. Por la misma razón, **si un secundario no arranca, el sistema se cuelga igual** (en `cpu_start` esperando `SignalReady`, o en el `registerInterrupt` del PI).
+4. **Enrutado de IPIs en SMP:**
+   - Núcleo 0: su excepción externa va al vector 0 = `WiiInterruptController::handleInterrupt`. Ahí hay que **comprobar primero la IPI** (SCR `IPI_PEND(0)` / causa del PI bit 20), reconocerla y llamar al `ipi_handler` de XNU (es `cpu_signal_handler`, el mismo para todos los núcleos: usa `cpu_number()` internamente).
+   - Núcleos 1 y 2: sus vectores 1 y 2 necesitan un **manejador solo de IPI** (registrado por `WiiInterruptController` con `provider->registerInterrupt(1/2, …)` usando los especificadores que ya crea `setCPUInterruptProperties`, o por cada `WiiCPU` secundario).
+   - `WiiInterruptController::handleInterrupt` hoy lee **siempre** `readCafeIntCause32(0)`: en los secundarios no debe usarse (solo IPI).
+
+## 28.2 Las IPIs pasan por el PI (bit 20+n)
+NetBSD `pic_pi.c`:
+- `pi_enable_irq(20+n)` pone el bit `20+n` en **`INTMSK(n)`** del núcleo n (`pi_irq_affinity`: las IPI van a su núcleo).
+- En cada excepción externa, `pi_get_irq` mira primero `SCR & IPI_PEND(cpu)`: si está, `pi_ipi_ack` (borra el bit en SCR en bucle hasta leer 0) y devuelve la IRQ `20+cpu`.
+- `pi_ack_irq` escribe además **`INTSR(cpu) = 1 << irq`**.
+
+→ Para recibir una IPI en el núcleo n: **habilitar el bit 20+n en `INTMSK(n)`**; al atenderla, **borrar SCR `IPI_PEND(n)` (en bucle) y escribir `INTSR(n) = 1<<(20+n)`**. [NO VERIFICADO si `INTSR(n)` bit 20+n se activa solo por el SCR; lo dice la prueba A de 28.3.]
+En Wiintosh eso encaja con `WiiInterruptController`: el vector 20 del PI del núcleo 0 es un vector normal (bit 20 de `INTMSK(0)`/`INTSR(0)`).
+
+## 28.3 Probar la auto‑IPI en caliente sin tocar `WiiCPU` (respuesta a la pregunta)
+Sí, con un kext aparte (`WiiSMPProbe`) en dos pruebas, de menos a más riesgo:
+
+**Prueba A — sondeo con interrupciones desactivadas (sin riesgo):**
+```cpp
+boolean_t en = ml_set_interrupts_enabled(FALSE);     // MSR[EE]=0: no se toma ninguna excepción
+UInt32 scr0  = mfspr(947);
+UInt32 sr0   = rd(0x0C000078);                        // INTSR(0)
+mtspr(947, scr0 | (1u << 20));                        // SCR IPI_PEND(0)
+eieio(); sync();
+UInt32 scr1  = mfspr(947);
+UInt32 sr1   = rd(0x0C000078);                        // ¿aparece el bit 20 en INTSR(0)?
+for (int i = 0; i < 1000 && (mfspr(947) & (1u << 20)); i++)
+  mtspr(947, mfspr(947) & ~(1u << 20));               // reconocer (bucle, como NetBSD)
+wr(0x0C000078, 1u << 20);                             // limpiar la causa del PI
+UInt32 scr2 = mfspr(947), sr2 = rd(0x0C000078);
+ml_set_interrupts_enabled(en);
+IOLog("SMPProbe A: SCR %08x→%08x→%08x  INTSR0 %08x→%08x→%08x\n", scr0, scr1, scr2, sr0, sr1, sr2);
+```
+Resultado esperado: `scr1` con el bit 20 puesto; `sr1` con el bit 20 (si la IPI pasa por el PI); `scr2` y `sr2` limpios. Como `INTMSK(0)` bit 20 está a 0, aunque el PI marque la causa no hay excepción. Si `scr2` no se limpia → **no** activar interrupciones y reportar.
+
+**Prueba B — entrega real por el PI (riesgo bajo‑medio), solo si A salió bien:**
+- `WiiInterruptController` es un `IOInterruptController`: desde el kext, localizarlo (`waitForService(serviceMatching("WiiInterruptController"))` + `OSDynamicCast(IOInterruptController, …)`) y usar sus métodos **públicos**: `registerInterrupt(this /*nub*/, 20, this, &handler, 0)` y `enableInterrupt(this, 20)`.
+- Handler: si `SCR & IPI_PEND(0)` → reconocer en bucle + `count++`. `WiiInterruptController::handleInterrupt` ya limpia la causa del PI al final.
+- Poner `SCR |= IPI_PEND(0)` una vez, esperar 10 ms, leer `count` (esperado 1), repetir 100 veces; después `disableInterrupt` + `unregisterInterrupt(this, 20)`.
+- Riesgo: si la excepción llegara **sin** el bit 20 en `INTSR(0)` (la prueba A lo habría mostrado), el PI no la reconocería y habría tormenta de interrupciones → cuelgue → reinicio. Por eso primero la A.
+- Así se valida la entrega de IPIs **sin cambiar el mkext**.
+
+## 28.4 Cómo cambiar `WiiPlatform` (mkext) sin peligro
+Todo lo nuevo de SMP va **detrás de un boot‑arg** (p. ej. `-wiismp`). Sin él, el código sigue exactamente el camino de 0.5.2: `numCPUs = 1`, sin tocar SCR/HID5/CAR ni MEM0.
+1. Compilar el mkext nuevo y comprobar que **sin** `-wiismp` arranca igual (varios reinicios).
+2. Guardar en la partición BOOT una copia `Wii_tiger.mkext.bak` de la 0.5.2. Recuperación extrema: el MacBook monta la FAT de la SD y restaura.
+3. Probar SMP poniendo en OpenBIOS `setenv boot-args "-v -wiismp cpus=2"`. Si cuelga: foto y `setenv boot-args "-v"` → vuelve al camino de siempre, sin sacar la SD.
+4. `numCPUs = 1 + (núcleos secundarios habilitados por boot‑args)` (28.1).
+
+## 28.5 Notas sobre los valores leídos
+- **HID5 sin PIRE:** PIRE hace que el `PIR` refleje el número de núcleo. XNU PPC no usa `PIR` para `cpu_number()` (usa el `per_proc` en SPRG), así que no es imprescindible. NetBSD lo activa en el núcleo 0; hacerlo solo con `-wiismp`.
+- **CAR = 0** frente al `|= 0xFC100000` de NetBSD: función no documentada (¿configuración de coherencia/caché compartida?). Aplicarlo solo en el camino `-wiismp`, **antes** de despertar secundarios, igual que NetBSD. No tocarlo en modo normal.
+- **MEM0 `0x08100100` = `li r3,0x40; mtmsr r3; isync; b 0x08000110`:** es el stub que el loader deja para los núcleos (pone MSR[IP] y salta a `0x08000110`, seguramente un bucle de espera del loader). Antes de sustituirlo:
+  - volcar también `0x08000100–0x08000200` para entender qué hay en `0x08000110`;
+  - **guardar los bytes originales** y restaurarlos si `startCPU` falla o en `stop`;
+  - usar el trampolín de NetBSD con `entry = 0x100` y `MSR = 0` (IP = 0 → vectores de XNU en 0).
+
+## 28.6 Plan SMP revisado (sustituye a 26.5)
+| # | Paso | Dónde | Riesgo |
+|---|---|---|---|
+| 0 | ✅ Lectura de registros (Parte 27) + volcar `0x08000100–0x200` | kext en caliente | ninguno |
+| 1 | Prueba A (28.3) | kext en caliente | ninguno |
+| 2 | Prueba B (28.3) | kext en caliente | bajo‑medio (reinicio si falla) |
+| 3 | `WiiPlatform` con `-wiismp`: sin el flag, idéntico a 0.5.2; con el flag, IPI en el PI (vector 20 del núcleo 0 → `ipi_handler`) todavía con 1 núcleo | mkext + boot‑arg | bajo |
+| 4 | Con `-wiismp cpus=2`: nodo `@1` (creado por `WiiPE` para no tocar OpenBIOS al principio), `numCPUs = 2`, HID5/SCR/CAR como NetBSD, trampolín en MEM0, `SCR |= WAKE(1)`, vector 1 con manejador solo de IPI, `INTMSK(1)` = solo bit 21 | mkext + boot‑arg | alto: foto si cuelga, quitar el flag |
+| 5 | Estabilidad (`make -j2`, horas, reloj, panics) | — | — |
+| 6 | Núcleo 2 (`cpus=3`), vector 2, `INTMSK(2)` = solo bit 22 | — | alto |
+| 7 | Upstream: issue (26.6) y luego PR | — | — |
