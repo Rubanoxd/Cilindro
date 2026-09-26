@@ -11,7 +11,35 @@
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
+
 ---
+
+# EMPIEZA AQUÍ (para Claude Code en el MacBook)
+
+**Contexto:** el humano (Rubén) tiene una Wii U con Wiintosh (Mac OS X **10.4.11**, Darwin 8.11.0) y quiere acelerar su GPU (GX2/Latte, familia AMD R7xx). Este archivo contiene toda la investigación previa. Tú corres en su MacBook.
+
+**Acceso ya funcionando:**
+- `ssh wiiu` (vía `ProxyJump redmi`; Redmi Miatoll con Fedora 44 hace de adaptador USB CDC‑ECM; red `172.16.42.0/24`, Redmi = `172.16.42.1`). Usuario Tiger: `rubano1421`.
+- Pixel 6a (Vanilla, root) por **cable USB al Mac** con `adb`.
+- En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
+
+**Reglas:**
+1. Lee las Partes 1–11 antes de actuar. La Parte 6–11 son **datos reales** de su consola; prevalecen sobre las partes 1–5 si hay contradicción.
+2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
+3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
+4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
+5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
+6. Anotar cada prueba en `docs/BITACORA.md` del fork.
+
+**Primeras tareas (en orden):**
+1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
+2. `ssh wiiu 'cat /System/Library/Frameworks/IOKit.framework/Headers/graphics/IOGraphicsInterface.h'` y guardar copia (vtable del plugin GA).
+3. `ssh wiiu 'sysctl hw.physmem hw.usermem'` (Parte 11.1).
+4. Compilar `osx-drivers` **sin cambios** en la Wii U (Parte 9.2) y comparar con la release 0.5.2.
+5. Preparar la sonda de la fase 0 (Parte 2 §3) y pedir permiso para cargarla.
+
+---
+
 
 # PARTE 1 — PLAN
 
@@ -1336,3 +1364,29 @@ Está colgado de **`IODisplayWrangler`**, no de un acelerador: es el cliente gen
 | CP vivo / microcódigo | ⏳ sonda fase 0 |
 | Memoria libre para anillo/2º búfer | ⏳ revisar `WiiPE` y probar `IOBufferMemoryDescriptor` contiguo |
 | Vanilla con Wiintosh | ⏳ prueba en consola |
+
+---
+
+# PARTE 11 — Investigación con los datos reales
+
+## 11.1 Memoria y framebuffer
+- OpenBIOS (`arch/ppc/wii/ofmem.c`) declara como RAM **solo MEM1** (`ramsize = 0x02000000`) y mapea todo lo que está **≥ `0x8F000000` (`CAFE_GFX_BASE`) como I/O sin caché** (`WIm`, modo `0x6a`). Por eso `memory@0` dice 32 MB.
+- Los 2 GB (`hw.memsize = 0x80000000`) los añade el lado Mac OS X (WiiPE / parches de BootX‑XNU). **[NO VERIFICADO dónde exactamente]**: 2 GB exactos no cuadra con MEM1 (32 MB) + MEM2 hasta `0x8F000000` (0x7F000000 = 2 GB − 16 MB). Comprobar antes de reservar memoria física fija:
+  ```bash
+  ssh wiiu 'sysctl hw.physmem hw.usermem hw.memsize'
+  # y en el fork: grep -rn "0x8F000000\|mem2\|memsize\|max_mem" WiiPlatform/ ../openbios/arch/ppc/wii/
+  ```
+- Regla práctica: **no usar direcciones físicas fijas** fuera de `0x8F000000–0x8FFFFFFF`. Para anillos, IB, shaders, write‑back y un 2º framebuffer, usar `IOBufferMemoryDescriptor` con `kIOMemoryPhysicallyContiguous` (el kernel garantiza que es suya). La zona `0x8F384000–0x8FDFFFFF` (entre el framebuffer TV y el D2) está fuera de la RAM que ve OpenBIOS y probablemente libre → candidata para un 2º framebuffer (10.9 MB) **[NO VERIFICADO que el kernel no la use; confirmar con 11.1]**.
+- Hay un `IORangeAllocator` de MEM2 en `WiiPE` (`kWiiFuncPlatformGetMem2Allocator`), pero **solo se crea en Wii** (necesita la propiedad `mem2-addresses`); en Wii U devuelve NULL. Se podría ampliar para Wii U y repartir la zona de 11.1 de forma ordenada (framebuffers, anillo, log persistente).
+
+## 11.2 Interrupción de la GPU
+- `gx2` → `interrupts = 2`, padre `interrupt-controller@c000000` = **WiiInterruptController** (Processor Interface de Espresso, `0x0C003000`, 32 vectores).
+- En `include/WiiProcessorInterface.hpp` el vector 2 se llama `kWiiPIVectorDVD` (numeración heredada de Wii/GameCube). En Wii U los vectores del PI se reinterpretan (Cafe usa registros por núcleo en `0x78`/`0x7C`) y OpenBIOS asigna el 2 a la GPU **[NO VERIFICADO contra WiiUBrew "Hardware/Processor Interface"; confirmar que el bit 2 de `kWiiPIRegCafeInterruptCauseBase` se activa con una interrupción de GPU]**.
+- Prueba segura (fase 1.4): habilitar solo `DxMODE_INT_MASK` bit 0 (vblank D1) durante 1 s, registrar el handler con `provider->registerInterrupt(0, ...)`, contar llamadas (esperado ≈ 60) y deshabilitar. Si no llega nada, la interrupción pasa por el anillo IH y hay que esperar a la fase 2.
+
+## 11.3 Modo y cursor
+- Único modo: ID 1, 1280×720 @ 60 Hz, `DF=0x3` (válido + seguro). Añadir modos = solo cambiar el viewport/escalador (DCE) sin tocar el timing HDMI.
+- `IOFBCursorInfo` 32×32×32 bpp confirmado.
+
+## 11.4 USB
+- El Redmi ("Fedora rescate") y el receptor teclado/ratón comparten `usb@d050000` (OHCI 12 Mbit/s). Mantener `rsync --bwlimit=200` y transferir en momentos sin uso interactivo.
