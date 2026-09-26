@@ -1118,3 +1118,26 @@ Mantener **con confirmación**: cualquier `ssh wiiu sudo ...`, cargas de kext, r
 5. [ ] ntfy + hooks del Mac + latido en el Redmi.
 6. [ ] Pixel: Vanilla en Aroma, adb vía Redmi, foto de la TV.
 7. [ ] Fase 0 (sonda) → anotar en `docs/BITACORA.md`.
+
+---
+
+# PARTE 6 — Estado confirmado (2026-09-26)
+
+- ✅ `ssh wiiu` desde el MacBook funciona (vía Redmi). La Wii U ve al Redmi como `172.16.42.1` (red del gadget CDC‑ECM `172.16.42.0/24`).
+- ✅ Hostname de Tiger: `wiiu-de-rubano-1421.local`, usuario `rubano1421`.
+- ✅ **Darwin 8.11.0 = Mac OS X 10.4.11** (xnu-792.24.17, RELEASE_PPC). Consecuencias:
+  - **Xcode 2.5 se puede instalar en la propia Wii U** (requiere 10.4.7+). La opción B de compilación (5.3) pasa a ser viable con Xcode 2.5 y no solo con el Xcode del DVD. La VM QEMU sigue siendo útil para no depender de la consola.
+  - Usar las cabeceras/SDK de 10.4u y `-mmacosx-version-min=10.4` en los builds de prueba propios (el repo usa 10.2 como mínimo; mantenerlo para PRs upstream).
+  - Las referencias de IOGraphics deben ser las de 10.4.11 (IOGraphics-179.x o posterior de Tiger).
+- ✅ Pixel 6a: **por cable USB directamente al MacBook** con adb. Se descarta el Bluetooth PAN y el túnel por el Redmi (Parte 4.4 y 5.4):
+  ```bash
+  adb devices                                   # en el Mac
+  adb exec-out su -c 'screencap -p' > vanilla.png
+  adb shell su -c 'input tap <x> <y>'
+  ```
+  Así Vanilla puede ocupar la Wi‑Fi del Pixel sin afectar a adb.
+
+Siguientes pasos:
+1. `ssh wiiu 'sw_vers; ioreg -l -w0 | grep -i -A5 gx2; kextstat | grep -i wii; ls /Volumes'` — ver drivers cargados y si la partición BOOT está montada.
+2. Instalar Xcode 2.5 en la Wii U (o en la VM) y compilar `osx-drivers` sin cambios.
+3. Fase 0: sonda.
