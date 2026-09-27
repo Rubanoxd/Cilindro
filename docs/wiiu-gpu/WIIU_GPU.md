@@ -40,7 +40,8 @@
 > - **Parte 38** — PIR, espacio de usuario, orden para despertar el núcleo 1 y plan (38.4).
 > - **Parte 39** — `WAKE(1)` → excepción 0x1700 en el núcleo 0.
 > - **Parte 40** — **0x1700 es la IPI de Espresso** (NetBSD `EXC_IPI`): redirigir el vector de XNU con 1 instrucción; `sync_cache64` para memoria baja; **orden actualizado (40.4)**.
-> - Si algo se contradice, vale la parte **más reciente** (40 > 39 > 38 > …).
+> - **Partes 41–42** — el núcleo 1 entra en XNU pero se cuelga en `cpu_sync_timebase`: **handshake por memoria sin coherencia**; valores HID de Nintendo en el trampolín, sonda de coherencia barata, orden 42.6.
+> - Si algo se contradice, vale la parte **más reciente** (42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -57,14 +58,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 40.4** (redirigir 0x1700 → reintentar el núcleo 1).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 42.6** (sonda de coherencia → HID de Nintendo en el trampolín → reintentar).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -2855,3 +2856,83 @@ Es lo mismo que hace NetBSD, pero sin copiar código.
 3. `startCPU(1)`: commpage, trampolín, `sync_cache64` de `0xE0` (`ResetHandler`) y de los datos por núcleo que lea el secundario, `INTMSK(1) = 0`, `WAKE` con EE = 0, y reactivar EE. Esperar la marca 200 ms **registrando `SCR` y el número de ICI recibidas**.
 4. Núcleo 1: vector 1 con el manejador de IPI y, después, `INTMSK(1) = 1<<21`.
 - Si vuelve a colgarse: foto. Si el panic ya no es 0x1700, anotar el nuevo vector/PC.
+
+
+---
+
+# PARTE 41 — (resumen del informe del Mac) El núcleo 1 entra en XNU y se cuelga
+
+- La redirección 0x1700 funciona. El núcleo 1 ejecuta el trampolín (marca visible); SCR tras WAKE = `0x80400000`.
+- Entra en XNU (`initCPU(true)`) y ambas CPUs quedan habilitadas.
+- **Síntoma:** una interrupción por núcleo y luego `processor_start(1)` no vuelve. Se queda en la manzana, sin panic.
+- Estado del núcleo 1: HID4 `0x80000000` y HID5 `0xC0000000` copiados del 0 (no son los valores de Nintendo), L2CR = 0, cachés apagadas al inicio.
+- Preguntas: bits de coherencia de HID2/4/5, L2 del núcleo 1, otras explicaciones del patrón, diagnóstico barato.
+
+---
+
+# PARTE 42 — Respuesta: es el handshake de `cpu_sync_timebase` sin coherencia
+
+## 42.1 El patrón encaja exactamente (xnu-792 `osfmk/ppc/cpu.c`)
+1. **Núcleo 1** (`cpu_sync_timebase`) crea `syncClkSpot` **en su pila**, envía la señal `SIGPcpureq/CPRQtimebase` al maestro (esa es la única IPI que recibe el núcleo 0) y espera en `while (!syncClkSpot.avail)`.
+2. **Núcleo 0** (`cpu_timebase_signal_handler`, dentro de la interrupción y **con EE=0**) escribe `abstime`, pone `avail = TRUE` y espera en `while (!ready)`.
+3. Si la escritura de `avail` del núcleo 0 se queda en su L1/L2 y el núcleo 1 no la ve (sin snooping, o el 1 lee desde su propia caché o sin caché), los dos giran para siempre.
+   - El núcleo 0 queda atrapado **con interrupciones apagadas** dentro del handler, así que no hay más interrupciones, ni panic, ni watchdog. Es justo "1 interrupción por núcleo y parada".
+   - La interrupción que recibe el núcleo 1 es probablemente el decrementador o la ICI inicial.
+
+**Conclusión:** no es el ack del ICI (pregunta 3). El ack por SCR basta: si no bastara, veríamos una tormenta de interrupciones, no una parada limpia. Es **coherencia de datos**.
+
+## 42.2 Bits de coherencia (pregunta 1)
+| Registro | Nintendo (IOSU/Cafe) | NetBSD | Tu núcleo 1 |
+|---|---|---|---|
+| HID0 | `0x00110024` y luego ICE/DCE | igual más cachés | copiado |
+| HID2 | `0x000F0000` | — | copiado |
+| HID4 | `0xB3B00000` | `0xB1B00000` | `0x80000000` ❌ |
+| HID5 | `0xC0000000 \| 0x7FFDC000` = `0xFFFDC000` | `0xE7FDC000` | `0xC0000000` ❌ |
+
+- HID4 `0xB3B00000` = H4A | L2FM(64B) | BPD | SBE | ST0 | LPE | DBP | **L2MUM** | **L2_CCFI**.
+  - **L2MUM** (modo multiunidad de L2) y **L2_CCFI** son los candidatos a "coherencia entre núcleos". **[NO VERIFICADO bit a bit]**
+  - Nintendo y NetBSD ponen ambos siempre.
+- HID5: `0x7FFDC000` incluye PIRE y los bits de L2 por núcleo (L2CR enable/size) y de snoop/UDMA.
+- **Regla práctica:** copia **exactamente** los valores de Nintendo (tabla, columna 1) en el trampolín del núcleo 1, **antes** de encender cachés (HID0 ICE/DCE) y antes de saltar a XNU.
+- **Núcleo 0:** que HID4 lea `0x80000000` **[verificar leyendo con `mfspr 1011` desde un kext]** implicaría que el 0 tampoco tiene L2MUM/CCFI.
+  - Así que el 0 tampoco hace snoop de las escrituras del 1.
+  - Hay que ponerlos también en el 0, **en caliente desde `WiiPE::start` antes del WAKE**, como hace NetBSD en `cpu_setup` (con la L2 activa).
+  - Hazlo con interrupciones apagadas y la secuencia `sync; mtspr HID4; isync`. Primero pon solo los bits que faltan (`|= 0x33B00000`).
+  - Si da miedo, prueba antes con L2MUM|L2_CCFI solos (`|= 0x00300000`). Si cuelga: recuperación desde la SD (WiiSMP=false).
+- **No toques** L2FM ni BPD en caliente si difieren del valor actual (cambian la geometría de la L2); limita el OR a los bits de modo.
+
+## 42.3 L2 del núcleo 1 (pregunta 2)
+- Cada núcleo de Espresso tiene su **propia L2** (512 KB / 2 MB / 512 KB). No es compartida.
+- Por eso el snooping entre L2 es lo que da coherencia, y `L2CR = 0` en el 1 es aceptable al principio: sin L2 no hay coherencia que perder en el 1.
+  - Pero el 1 **sí** necesita L1 con snoop (HID4/HID5 correctos) y el 0 necesita snoop de su L2.
+- Después, para rendimiento: invalidar la L2 del 1 (L2CR L2I, esperar a que L2IP=0) y poner L2E. El tamaño lo marca HID5, no el L2CR del maestro.
+  - XNU copia el L2CR del maestro en `cacheInit` (`pfL2CR`). Si se copia con L2E sin invalidar antes, mete basura. **Revisa que el trampolín invalide o que `pfL2CR` del núcleo 1 quede a 0 hasta que lo hagas bien.**
+- Rutina pendiente: pide al humano otra vez el volcado de Nintendo 0x08000240–0x330. Probablemente contiene justo esta secuencia de init de L2.
+
+## 42.4 Diagnóstico barato (pregunta 4) — antes de tocar el kernel
+**Sonda de coherencia en el trampolín, sin entrar en XNU:**
+1. Elige una palabra en MEM2 (p. ej. dentro del buffer físico que ya usas para marcas).
+2. En el núcleo 1, con los HID de Nintendo y **DCE encendido**, haz un bucle: `contador++; stw` (sin dcbst). Un segundo campo solo lo actualizas con `dcbst; sync` cada N vueltas.
+3. En el núcleo 0 (kext), lee la palabra por una **mapeo con caché** y otro **sin caché** (IOMemoryDescriptor `kIOMapInhibitCache`) varias veces.
+   - Con caché y cambia → hay snoop ✅.
+   - Solo cambia sin caché o solo el campo con dcbst → escrituras visibles solo tras flush, **sin snoop**.
+   - No cambia nunca → el 1 no avanza o escribe en otra dirección.
+4. Repite en sentido inverso: el 0 escribe con caché y el 1 lo lee y pinta un color en el framebuffer según lo que ve. Esto modela exactamente `avail`.
+5. Repite con y sin el `|= 0x00300000` en el HID4 del núcleo 0 para identificar el bit.
+
+- Pintar dentro de `cpu_sync_timebase` también sirve, pero requiere parches al kernel. Hazlo solo si la sonda dice que hay coherencia y aun así se cuelga.
+  - Pinta después de `cpu_signal`, dentro del bucle `avail`, y después de `ready`. En el handler del 0, pinta después de `avail = TRUE`.
+
+## 42.5 Otra trampa: lwarx/stwcx. y cachés apagadas
+- `cpu_signal` usa `hw_compare_and_store` (lwarx/stwcx.) sobre `MPsigpStat` del **destino**.
+- Con DCE=0 en el 1, las reservas sobre memoria sin caché en 750-class **no son fiables**: stwcx. puede fallar siempre o tener éxito sin reserva.
+  - El bucle `while (cpu_signal(...) != KERN_SUCCESS)` pasó una vez (el 0 recibió la señal), así que aquí no está la parada.
+  - Pero asegúrate de que el 1 enciende ICE/DCE **antes** de `initCPU`/XNU. Una vez dentro, XNU asume cachés encendidas (`cacheInit` en `start.s`).
+
+## 42.6 Orden recomendado
+1. Leer y registrar HID0/2/4/5 y L2CR del núcleo 0 (kext, solo lectura).
+2. Trampolín del núcleo 1: HID2 = `0x000F0000`, HID4 = `0xB3B00000`, HID5 = `0xFFFDC000`, HID0 = `0x00110024`, invalidar L1 (ICFI/DCFI), luego ICE|DCE. Mantener L2CR = 0 y `pfL2CR` del 1 a 0.
+3. Núcleo 0 en `WiiPE::start`, antes del WAKE: HID4 `|= 0x00300000` (L2MUM|L2_CCFI) y `sync; isync`. **Pedir confirmación.**
+4. Sonda 42.4 (sin XNU): validar coherencia en ambos sentidos.
+5. Reintentar el arranque SMP. Si se cuelga, pintar dentro de `cpu_sync_timebase` (42.4 final).
+6. Pedir al humano el volcado 0x08000240–0x330 para completar la init de L2.
