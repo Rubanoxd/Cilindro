@@ -50,7 +50,8 @@
 > - **Partes 53–54** — sin WiiUSB/IPC sigue igual. El bucle ocioso **no necesita IPI**; que el núcleo 1 reciba solo ~3 externas indica que **no está ocioso** (ocupado en un hilo o con la expulsión desactivada). Offsets de hwCtr/SIGP y de `struct processor` para verlo sin código nuevo (54.2). Plan B: arrancar el núcleo 1 **después** del escritorio (54.5).
 > - **Partes 55–56** — el núcleo 1 se queda en su **hilo de arranque después de SignalReady** (antes del primer cambio de contexto) y el núcleo 0 se congela a la vez **sin panic visible**. Muy probable: un panic/timeout de lock cuyo camino (`Debugger` → `cpu_signal(SIGPdebug)` → tu `signalCPU`) se bloquea. Balizas exactas y gancho en `_panic` (56.4).
 > - **Partes 57–58** — con 56.6 el núcleo 1 ya llega a `idle_thread` sin congelación; vuelve a faltar Latte 5 (OHCI0). La baliza 13 **no prueba** que esté ocioso: `idle_thread` salta al hilo recogido **sin pasar por más balizas**. Si `processor[1]->active_thread ≠ idle_thread`, el núcleo 1 está **ejecutando sin fin la action de OHCI** (58.2). PC del núcleo 1 con un stub en `_interrupt` (58.3).
-> - Si algo se contradice, vale la parte **más reciente** (58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 59–60** — ¡escritorio con `hw.ncpu 2`! Pero el núcleo 1 está **muerto en un panic silencioso** (muy probablemente `panic("thread_terminate")`: `ast_taken` no vio AST_APC). Por eso el sistema funciona como UP y arranca; en smp33, con el núcleo 1 vivo, se colgaba OHCI. Cómo confirmarlo por SSH (60.3).
+> - Si algo se contradice, vale la parte **más reciente** (60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -67,14 +68,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 58.5** (processor[1] ahora + PC del núcleo 1 + estado del workloop de OHCI).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 60.6** (leer panicstr/debug_buf y thread->ast por SSH; revisar stubs de hw_atomic_*).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -3612,3 +3613,99 @@ public:
   1. Una sola prueba con las filas de `processor[1]` + `idle_count` (58.2), el stub `_interrupt` + ping para el PC (58.3) y los accesores de 58.4.
   2. Si es el caso (b) en WiiOHCI: arreglarlo (el filtro solo lee y reconoce el estado; todo el recorrido de TDs y listas se hace en la action, bajo el gate; o un spinlock común filtro/action/UIM). Después, SMP normal.
   3. Plan B (54.5) solo si el diagnóstico apunta fuera de USB o para medir mientras se arregla OHCI.
+
+
+---
+
+# PARTE 59 — (informe del Mac) smp34 llega al escritorio con 2 núcleos, pero sin paralelismo
+
+- **Escritorio + SSH**, `hw.ncpu: 2`, `hw.activecpu: 2`. Latte mask0 `0xA0` y PI `0x01000050` normales; OHCI0 con prod = cons = 0x10D y el gate libre.
+- smp34 = smp33 + diagnóstico de 58 (con un ping por SCR al núcleo 1 cada segundo).
+- **Sin paralelismo**: un bucle `sh` tarda 14 s solo y 28 s con dos copias a la vez.
+- `processor[1]`: state = 1, current_pri = **95**, `idle_count` = 0, active_thread = 0x02AE20C0 (no es el idle).
+- **1 ping recibido** en más de 2 minutos: SRR0 = `ml_set_interrupts_enabled+0x70`, LR = `ast_taken+0xDC`, EE = 1.
+- Balizas del núcleo 1: 0, 1, 6 (`clock_init`), 7 (`thread_terminate`), 8 (`ast_taken`), **14 (`Debugger`)**, 21 y 22 (SCR). **No** pasa por 9 (`thread_terminate_self`), block/select/dispatch ni idle. Sin gancho de panic pintado.
+
+---
+
+# PARTE 60 — Respuesta: el núcleo 1 entra en panic en `thread_terminate` y se queda colgado sin que se vea
+
+## 60.1 La secuencia exacta (xnu-792)
+`processor_start_thread` → `thread_terminate(self)` (`kern/thread_act.c:119-143`):
+```c
+result = thread_terminate_internal(thread);   // act_abort → install_special_handler_locked
+if (thread->task == kernel_task) {             //   → thread_ast_set(thread, AST_APC)   (hw_atomic_or)
+    ml_set_interrupts_enabled(FALSE);          //   → ast_propagate(thread->ast)          (*pending_ast |= …)
+    ast_taken(AST_APC, TRUE);
+    panic("thread_terminate");                 // ← SOLO se llega aquí si ast_taken NO ejecutó el APC
+}
+```
+`ast_taken` (`kern/ast.c:90-161`):
+```c
+reasons &= *myast;  *myast &= ~reasons;        // myast = &per_proc->pending_ast
+...
+ml_set_interrupts_enabled(enable);             // ← aquí entró tu único ping (LR = ast_taken+0xDC)
+if (reasons & AST_BSD) bsd_ast(thread);
+if (reasons & AST_APC) act_execute_returnhandlers();   // hace spllo() y llega a special_handler
+ml_set_interrupts_enabled(FALSE);                       //   → thread_terminate_self (baliza 9)
+```
+- Si `AST_APC` hubiera estado en `reasons`, `act_execute_returnhandlers` habría hecho **`spllo()`** (EE=1 → más pings) y `special_handler` → **`thread_terminate_self`** (baliza 9). No pasó ninguna de las dos cosas.
+- Así que `reasons` **no tenía AST_APC**: `ast_taken` vuelve → **`panic("thread_terminate")`** → `Debugger` (baliza 14).
+- Dentro de `Debugger` (`ppc/model_dep.c:555-625`, con `panicstr` puesto):
+  1. comprime `debug_buf`;
+  2. `PESavePanicInfo` (tu PE);
+  3. `cpu_signal(0, SIGPdebug)`. Esas son tus balizas 21/22 en el núcleo 1: `signalCPU` con el lock y la `mtspr`;
+  4. `hw_cpu_sync(&debugger_sync, LockTimeOut)` (caduca);
+  5. `draw_panic_dialog()`, que el WindowServer tapa después o que tu framebuffer no muestra;
+  6. **`PEHaltRestart(kPEHangCPU)` → el núcleo 1 queda colgado para siempre con EE=0**.
+- Es exactamente lo que ves: prioridad 95 (MAXPRI_KERNEL = el `processor_start_thread`), `RUNNING`, sin cambios de contexto, sin pings y fuera de `idle_queue`.
+- Tu gancho de `_panic` no pintó nada: revisa si el stub de `_panic` salta a `wiiPanicHook` también en el núcleo 1 (en smp31 funcionó porque el panic fue un DSI en `trap`). Con el núcleo 1 ya "aparcado", el panic en sí no se ve.
+
+## 60.2 Por qué ahora llega al escritorio (pregunta 3)
+- **El ping no tiene que ver.** El núcleo 1 murió en su hilo de arranque, `RUNNING` a prioridad 95 y fuera de `idle_queue`. El planificador nunca le da trabajo, así que el sistema funciona **como UP** y OHCI no tiene carreras.
+- En **smp33**, el núcleo 1 sí terminó bien su hilo de arranque (llegó a `idle_thread`) y ejecutó hilos de verdad. Ahí fue donde **OHCI se colgó**. Es no determinista: unas veces el APC se pierde (smp34) y otras no (smp33).
+- Hay **dos fallos distintos**:
+  - (A) a veces el APC del hilo de arranque se pierde → panic silencioso en el núcleo 1;
+  - (B) con el núcleo 1 trabajando de verdad, WiiOHCI se atasca (52.4 / 58.4).
+
+## 60.3 Confírmalo ahora por SSH (el sistema está vivo)
+Desde tu kext (o uno de prueba cargado por SSH), vuelca con `IOLog` y mira en `system.log`:
+1. **`_panicstr`** (`const char *`, `kern/debug.c:84`): si apunta a `"thread_terminate"`, confirmado. Mira también `_panic_caller`, `_paniccpu` y `_nestedpanic`.
+2. **`_debug_buf`** / **`_debug_buf_ptr`** (`char *`, `kern/debug.c:93-95`): el texto completo del panic. Puede estar comprimido por `packAsc`, pero la primera línea suele verse.
+3. **`thread 0x02AE20C0`**: su campo `ast` y `active`. Saca los offsets de `otool -tv`:
+   - `ast`: en `_act_execute_returnhandlers`, el `addi r3,rX,N` antes de `bl _hw_atomic_and` (el `thread_ast_clear`);
+   - `active`: en `_thread_terminate_internal`, el `lbz/lwz …,N(r31)` antes de `act_abort`.
+4. **`per_proc[1]->pending_ast`**: offset `PP_PENDING_AST` = el `addi r3,r3,N` de `_ast_pending` (`machine_routines_asm.s:1934-1937`).
+5. `debugger_cpu`, `debugger_sync`, `debug_mode` y `per_proc[1]->debugger_active` (símbolos `_debugger_cpu`, `_debugger_sync`, `_debug_mode`).
+
+**Cómo interpretarlo:**
+| `thread->ast` | `pending_ast[1]` | Significa |
+|---|---|---|
+| sin 0x20 (AST_APC) | — | `thread_ast_set` (= `hw_atomic_or(&thread->ast, 0x20)`) **no escribió** → mira el stub dcbst de `hw_atomic_or` |
+| con 0x20 | sin 0x20 | `ast_propagate` escribió en otro per_proc, o alguien lo pisó entre medias |
+| con 0x20 | con 0x20 | `ast_taken` leyó mal (orden/coherencia) o `thread->active` ya era FALSE (`KERN_TERMINATED`) |
+
+## 60.4 El sospechoso principal de (A): los stubs de `hw_atomic_or`/`hw_atomic_and`
+- `thread_ast_set` es **`hw_atomic_or`** (`osfmk/ppc/hw_lock.s:582-590`):
+  ```
+  mr r6,r3
+  ortry: lwarx r3,0,r6 ; or r3,r3,r4 ; stwcx. r3,0,r6 ; bne-- ortry ; blr
+  ```
+  Tu parcheo cambió `stwcx.` por `b stub` (dcbst + stwcx. + `b` de vuelta).
+- Comprueba **con `otool` sobre la memoria en vivo** (o volcando los stubs) que para `hw_atomic_or`, `hw_atomic_and`, `hw_atomic_add/sub` y `hw_compare_and_store`:
+  1. el stub hace `dcbst 0,r6` (el **mismo** rA/rB que el `stwcx.`) seguido de `stwcx. r3,0,r6` idéntico al original;
+  2. vuelve **a la instrucción siguiente** (`bne--`) y no toca cr0 entre el `stwcx.` y el `bne`;
+  3. no usa ningún registro vivo (r3, r4, r6).
+  - Un stub que devolviera cr0 = EQ sin haber hecho el `stwcx.`, o que usara rA/rB equivocados, haría que `thread->ast` **no se escribiera a veces**. Eso es justo el síntoma no determinista.
+- Con un solo núcleo (WiiSMP=false) ¿se aplican estos parches? Si **no** se aplican, el fallo (A) solo existe en SMP, lo que encaja. Si se aplican también en UP, el stub en sí estaría bien y la causa sería otra (fila 2 o 3 de la tabla).
+
+## 60.5 Qué pintar si 60.3 no basta (pregunta 2)
+- Gancho en `_Debugger` como el de `_panic`: guarda r3 (mensaje: "panic"), LR y `panicstr` por núcleo.
+- Balizas en `_act_execute_returnhandlers` (entrada) y en `_special_handler` (entrada).
+- Símbolos útiles: `_panicstr`, `_panic_caller`, `_paniccpu`, `_nestedpanic`, `_debug_buf`, `_debug_buf_ptr`, `_debugger_cpu`, `_debugger_sync`, `_debug_mode`, `_debugger_is_slave` (array por CPU; si existe en este kernel).
+
+## 60.6 Orden
+1. **Por SSH, sin reiniciar**: `panicstr`, `debug_buf`, `thread->ast`, `thread->active`, `pending_ast[1]` (60.3).
+2. Revisar los stubs dcbst de `hw_atomic_*` y `hw_compare_and_store` (60.4).
+3. Arreglado (A), volverá a verse (B) con OHCI. Entonces, con el núcleo 1 vivo y SSH disponible si llega a arrancar, aplicar el arreglo de WiiOHCI (58.4 / 52.4): el filtro solo lee y reconoce el estado; las listas y TDs solo se tocan en la action bajo el gate, o con un spinlock común.
+4. El ping por SCR se puede quitar: no es lo que hace arrancar.
