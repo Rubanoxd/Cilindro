@@ -64,7 +64,8 @@
 > - **Partes 81–82** — ¡**escritorio con 2 núcleos reales** (arranque tardío, tormenta resuelta quitando pfCanDoze)! Fallan procesos de usuario (segfault en sudo, sshd muere). Sospechoso principal: **XNU no hace `tlbsync`** porque Espresso no tiene `pfSMPcap` → activar `pfSMPcap` en `pf.Available` **y en SPRG2** de los dos núcleos (82.2). Verificar que ningún hilo de usuario corre en el núcleo 1 (82.3).
 > - **Partes 83–84** — con `pfSMPcap`/`tlbsync`, **2 núcleos estables >10 min con SSH**; sin SIGSEGV. Quedan: un `cp` con EIO y un load ~3 subiendo sin CPU. En xnu el load cuenta **hilos ejecutables** (`pset->run_count`, atómico), no esperas: o hay una **fuga de `hw_atomic_add/sub`** o hilos ejecutables que nadie recoge (84.1). EIO: primero mirar los mensajes de WiiSDHC en system.log (84.2).
 > - **Partes 85–86** — errores de la SD con 2 núcleos: el workloop (núcleo 1) corre **a la vez** que el manejador primario (núcleo 0) y la línea de nivel del SDHC sigue alta hasta que la action la limpia → **interrupciones duplicadas** que leen estado 0 o llegan sin comando. Arreglo: **leer y limpiar el estado del SDHC en un filtro** (IOFilterInterruptEventSource) y acumularlo; revertir el ack adelantado de Latte (86.2). WindowServer al 100 %: `sample` por SSH (86.4).
-> - Si algo se contradice, vale la parte **más reciente** (86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 87–88** — con el filtro en WiiSDHC: **0 errores de SD, 23 min estables con 2 núcleos**. Queda: gcc falla a veces sin mensaje y el load sube a ~1. Siguiente: capturar **qué etapa** de gcc falla y con qué señal (88.1), `sample` de WindowServer, **probar de nuevo el arranque SMP desde el principio** (sin arranque tardío) y **medir** frente a UP antes de la dylib de stubs (88.3).
+> - Si algo se contradice, vale la parte **más reciente** (88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -81,14 +82,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 86.5** (filtro en WiiSDHC + estado acumulado; revertir ack de Latte; `sample` de WindowServer).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 88.4** (diagnóstico de gcc; arranque SMP temprano; medir frente a UP).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -4586,3 +4587,57 @@ WiiOHCI ya usa filtro. Comprueba que su filtro hace el W1C de `HcInterruptStatus
 2. Revisar el filtro de OHCI (86.3).
 3. Estrés 30 min (dd/cp/cmp, gcc) y `grep WiiSDHC /var/log/system.log`.
 4. Si WindowServer vuelve a girar: `sample` (86.4).
+
+
+---
+
+# PARTE 87 — (informe del Mac) smp54: filtro en WiiSDHC → 0 errores de SD; 23 minutos estables
+
+- WiiSDHC con `IOFilterInterruptEventSource` + `_pendingIntStatus` acumulado + máquina de estados tolerante. Ack de Latte otra vez **después** de los manejadores. El filtro de OHCI ya hacía el W1C.
+- 12 rondas: **0 errores nuevos de SD**; dd+cp+cmp **12/12**; gcc **8/12** (falla sin mensaje); load 0,1–0,3 y luego ~1,1.
+- **23 min con `hw.activecpu: 2`**, SSH siempre, escritorio vivo.
+
+---
+
+# PARTE 88 — Respuesta: poner nombre al fallo de gcc, y medir
+
+## 88.1 gcc que falla a veces (pregunta 1)
+**Primero, saber qué etapa falla y cómo.** gcc es un conductor que lanza `cc1`, `as` y `collect2`/`ld` con `fork`+`exec`. "Falla sin mensaje" casi siempre significa que **un hijo murió por una señal**, o que devolvió un código raro que el conductor no explica.
+1. Bucle con captura completa:
+   ```sh
+   for i in $(jot 30); do
+     gcc-4.0 -v -save-temps -o /tmp/t$i /tmp/t.c > /tmp/g$i.log 2>&1; echo "$i rc=$?"
+   done
+   ```
+   En los que fallen, `-v` dice qué orden fue la última y `-save-temps` qué ficheros intermedios se llegaron a crear (`.i`, `.s`, `.o`).
+2. `ls -lt /Library/Logs/CrashReporter/` (cc1, as, ld, collect2, gcc-4.0) y `grep -i "cc1\|as\b\|ld\b\|signal\|exited" /var/log/system.log`. Un crash log trae el **PC** y la **dirección de fallo**.
+3. Para ver la señal sin crash log: `ktrace -i -t cnis gcc-4.0 …; kdump | grep -i "sig\|exit"`.
+
+**Qué puede corromper un proceso de usuario atado al núcleo 0.** Lo que el **kernel** hace sobre su memoria **desde el núcleo 1**:
+- **E/S de páginas de usuario:** la action de WiiSDHC (workloop, puede ir en el núcleo 1) copia el double buffer a páginas del UBC o del proceso (`writeBytes`). Eso es coherente (loads/stores normales con M=1). La **caché de instrucciones** también, porque `vm_fault` sincroniza en el núcleo que falla y con ABE `dcbst`/`icbi` se difunden. **Comprueba** que el binario cargado es idéntico: `md5 /usr/libexec/gcc/powerpc-apple-darwin8/4.0.1/cc1` varias veces con 2 núcleos (debe dar siempre lo mismo).
+- **fork / copy-on-write / exit:** los `pmap_protect`/`pmap_remove`/liberar páginas pueden correr en hilos del kernel del núcleo 1 (p. ej. el **pageout** o el **reaper** de tareas). Con `tlbsync` debería ir bien, **salvo que quede algún `tlbie` sin `tlbsync`**:
+  - los 4 sitios de `hw_vm.s` que miran `pfSMPcap` ya lo hacen;
+  - busca con `otool` **cualquier otro `tlbie`** del kernel (`hw_vm.s`, `pmap.c` inline, `cacheInit`, `hw_perfmon`, `vmachmon`) que **no** vaya seguido de `tlbsync`. Por ejemplo, los `tlbie` de las rutinas 32-bit de invalidación de segmento/mapping y `mapping_tst_ref`/`hw_protect`.
+- **Atómicos entre usuario y kernel:** si un proceso hace `lwarx/stwcx.` (sin parche) en memoria compartida con el kernel y el kernel escribe esa palabra desde el núcleo 1, el erratum puede dar un falso éxito. Es raro en gcc (pipes y ficheros), pero posible en `mach_msg` o en memoria compartida.
+- **Los atómicos del propio kernel:** amplía la autoprueba a `hw_atomic_sub` y `hw_compare_and_store` (84.1). Un contador de referencias de `vm_object`/`vm_page` que se pierde daría fallos raros en fork/exit (páginas liberadas en uso).
+
+## 88.2 Load que sube a ~1 (pregunta 2)
+- Sí: mira WindowServer y Finder con `ps -axo pid,stat,time,command` y **`sudo sample <pid> 5`**. Con el userland atado al núcleo 0, un hilo de usuario **ejecutable que no corre** (R sin tiempo de CPU) sería raro. Uno que **gira** (R con tiempo de CPU) mostrará su bucle en `sample`.
+- Un load ~1 con alguien girando al 100 % también roba el núcleo 0 a todo el userland, y podría ser **la causa de los timeouts de gcc**.
+
+## 88.3 Pregunta 3: ¿medir o dylib de stubs?
+**Medir primero, en este orden:**
+1. **Arranque SMP desde el principio (sin arranque tardío).** Los fallos de la pantalla gris y de la manzana de smp48-50 pueden haber sido el doble despacho del SDHC (86.2), que ya está arreglado. Si arranca bien desde el inicio, quitas una rareza. Si no, el arranque tardío sigue ahí.
+2. **Medidas frente a UP** (misma tarjeta, mismo mkext, `WiiSMP` activado o desactivado):
+   - E/S: `dd if=/dev/zero of=/tmp/big bs=1m count=100` y `dd if=/tmp/big of=/dev/null bs=1m`;
+   - red: copia de un fichero grande por `scp` desde el Mac a la Wii U;
+   - mezcla: los dos anteriores **a la vez** que un bucle de usuario (`yes > /dev/null`);
+   - fluidez del escritorio (mover ventanas) con carga.
+   - Con el userland atado al núcleo 0, lo esperable es que **la E/S y la red no roben CPU al usuario**: el núcleo 1 absorbe workloops, interrupciones de los drivers (sus actions) y el trabajo del kernel.
+3. **Después, la dylib de stubs (72.1.a)** para soltar el userland. Es la parte grande (hay que generar stubs a menos de 32 MB de cada grupo de bibliotecas del shared region y cargarla en todos los procesos). Compensa solo si 2) enseña que el núcleo 1 se queda ocioso mientras el 0 va saturado.
+
+## 88.4 Orden
+1. Bucle de gcc con `-v -save-temps` + crash logs + `ktrace` (88.1); `md5` de `cc1` repetido.
+2. `sample` de WindowServer/Finder si el load sube (88.2).
+3. Buscar `tlbie` sin `tlbsync` fuera de los 4 sitios; autoprueba ampliada a sub/CAS.
+4. Arranque SMP temprano (88.3.1) y medidas (88.3.2).
