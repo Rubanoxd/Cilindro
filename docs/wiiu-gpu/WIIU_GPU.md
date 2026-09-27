@@ -65,7 +65,8 @@
 > - **Partes 83–84** — con `pfSMPcap`/`tlbsync`, **2 núcleos estables >10 min con SSH**; sin SIGSEGV. Quedan: un `cp` con EIO y un load ~3 subiendo sin CPU. En xnu el load cuenta **hilos ejecutables** (`pset->run_count`, atómico), no esperas: o hay una **fuga de `hw_atomic_add/sub`** o hilos ejecutables que nadie recoge (84.1). EIO: primero mirar los mensajes de WiiSDHC en system.log (84.2).
 > - **Partes 85–86** — errores de la SD con 2 núcleos: el workloop (núcleo 1) corre **a la vez** que el manejador primario (núcleo 0) y la línea de nivel del SDHC sigue alta hasta que la action la limpia → **interrupciones duplicadas** que leen estado 0 o llegan sin comando. Arreglo: **leer y limpiar el estado del SDHC en un filtro** (IOFilterInterruptEventSource) y acumularlo; revertir el ack adelantado de Latte (86.2). WindowServer al 100 %: `sample` por SSH (86.4).
 > - **Partes 87–88** — con el filtro en WiiSDHC: **0 errores de SD, 23 min estables con 2 núcleos**. Queda: gcc falla a veces sin mensaje y el load sube a ~1. Siguiente: capturar **qué etapa** de gcc falla y con qué señal (88.1), `sample` de WindowServer, **probar de nuevo el arranque SMP desde el principio** (sin arranque tardío) y **medir** frente a UP antes de la dylib de stubs (88.3).
-> - Si algo se contradice, vale la parte **más reciente** (88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 89–90** — ningún hilo de usuario corre en el núcleo 1 y aun así el userland se corrompe (salida duplicada, fichero recién creado que desaparece). Encaja con **bits R/C (Changed) de las PTE perdidos** entre núcleos: **NetBSD Espresso MP hace `dcbst` de la PTE tras cada escritura** y XNU no. Parchear las ~12 escrituras de PTE de `hw_vm.s` (+ lectura de R/C) con `dcbf` (90.2).
+> - Si algo se contradice, vale la parte **más reciente** (90 > 89 > 88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -82,14 +83,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 88.4** (diagnóstico de gcc; arranque SMP temprano; medir frente a UP).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 90.5** (dcbf tras escrituras de PTE en hw_vm.s + antes de leer R/C; pruebas de COW y de presión de memoria).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -4641,3 +4642,79 @@ WiiOHCI ya usa filtro. Comprueba que su filtro hace el W1C de `HcInterruptStatus
 2. `sample` de WindowServer/Finder si el load sube (88.2).
 3. Buscar `tlbie` sin `tlbsync` fuera de los 4 sitios; autoprueba ampliada a sub/CAS.
 4. Arranque SMP temprano (88.3.1) y medidas (88.3.2).
+
+
+---
+
+# PARTE 89 — (informe del Mac) Ningún hilo de usuario corre en el núcleo 1, y aun así el userland se corrompe
+
+- gcc `-v -save-temps` **30/30** bien; md5 de `cc1` estable; sin crash logs.
+- Load ~1: **ScreenSaverEngine** (10 min de CPU); en otro arranque, **WindowServer en R girando**. `sudo sample` → SIGSEGV. `shutdown -r` no reinicia (`reboot -q` sí).
+- Bucle `sh` 50 000: **1 solo 15-17 s** (en UP 4-5 s), 2 a la vez 6-9 s.
+- smp55: contador en `_thread_dispatch` de hilos de usuario en el núcleo 1 = **0**.
+- **Corrupción de userland** con 2 núcleos: un heredoc no crea el fichero ("No such file") y `date` sale **duplicado** ("1790553475\n1790553475"), como un buffer de stdio vaciado dos veces.
+
+---
+
+# PARTE 90 — Respuesta: al kernel le falta vaciar la caché tras escribir las PTE (como hace NetBSD)
+
+## 90.1 Pregunta 1: los `tlbie` están todos cubiertos
+- En `hw_vm.s` hay **8 `tlbie`** y **8 `tlbsync`**. Los 32 bits están en `hrmPtlb32` (l.691-706), `hrmBTLBi` (l.1010-1024), `hpfTLBIE32` (l.4342-4376) y **`mapInvPte32`** (l.8249-8330). Todos llevan `rlwinm. …,pfSMPcapb` + `tlbsync`, así que con `pfSMPcap` están completos.
+- `mapInvPte32` es la que usan `hw_protect` (l.3201), `hw_walk_phys` (l.2670), `hw_clear_maps`, `hw_test_rc`, etc.
+- El único otro `tlbie` es la función C `tlbie()` de `misc_asm.s:187`, y **nadie la llama** en xnu-792.
+- **No es un `tlbie` suelto.**
+
+## 90.2 Preguntas 2 y 3: la PTE y la caché — lo que hace NetBSD
+NetBSD (`powerpc/oea/pmap.c`), el mismo código que corre Espresso MP:
+```c
+static inline void pmap_pte_set(volatile struct pte *pt, struct pte *pvo_pt) {
+    pt->pte_lo = pvo_pt->pte_lo;  EIEIO();
+    pt->pte_hi = pvo_pt->pte_hi;  TLBSYNC(); SYNC();
+#ifdef MULTIPROCESSOR
+    DCBST(pt);                    // ← empuja la PTE a memoria
+#endif
+}
+static inline void pmap_pte_clear(volatile struct pte *pt, vaddr_t va, int ptebit) {
+    pt->pte_lo &= ~ptebit;  TLBIE(va); SYNC(); EIEIO(); TLBSYNC(); SYNC();
+#ifdef MULTIPROCESSOR
+    DCBST(pt);
+#endif
+}
+```
+(`pmap.c:748-784`; `DCBST` en l.491). Es decir: **en MP, tras escribir una PTE, se vacía su línea de caché a memoria.** No lo hace para la lectura normal: lo hace porque **la búsqueda por hardware en la tabla** (el "table walk") y la **actualización de los bits R/C que hace el hardware** del otro núcleo **no se sincronizan bien con la caché de datos** de quien escribió la PTE. XNU (pensado para G4/G5 con tablas y buses totalmente coherentes) **no lo hace**.
+
+**Cómo explica tus síntomas:**
+- El núcleo 0 escribe en una página → su hardware pone **C (Changed)** en la PTE, en memoria.
+- Mientras tanto, un hilo del kernel en el núcleo 1 (pageout, `hw_test_rc`, `hw_clear_maps`, `mapping_tst_ref`…) tiene esa PTE **en su caché** y la reescribe (invalidar, limpiar R/C, revalidar) o lee R/C de **su copia vieja**.
+- Resultado: **el bit C se pierde**. XNU cree que la página está **limpia** y:
+  - la **tira sin escribirla** (datos nuevos perdidos: el heredoc que "no existe");
+  - o la **recupera del disco/estado anterior**: una página que vuelve a un contenido viejo hace que un buffer de stdio ya vaciado se vacíe **otra vez** (`date` duplicado).
+- Es el mismo tipo de fallo "silencioso" que ves: sin panic, procesos que se comportan raro, ScreenSaverEngine/WindowServer girando con datos inconsistentes.
+
+## 90.3 El parche en XNU (sitios de 32 bits en `hw_vm.s`)
+Todas las **escrituras de PTE** de 32 bits. Usa **`dcbf`** (en Espresso es lo que funciona, Parte 77) en vez del `dcbst` de NetBSD, **seguido de `sync`**:
+| Línea | Instrucción | Qué es |
+|---|---|---|
+| 685 | `stw r5,0(r26)` | invalidar PTE (`hw_rem_map` 32) |
+| 2679 / 2681 | `stw r5,4(r3)` / `stw r4,0(r3)` | reescribir y revalidar (`hw_walk_phys`) |
+| 3210 / 3212 | `stw r5,4(r3)` / `stw r4,0(r3)` | reescribir y revalidar (`hw_protect`) |
+| 3395 | `stw r4,0(r3)` | revalidar (`hw_test_rc`) |
+| 4336 | `stw r6,0(r19)` | PTE inválida al robar una ranura (`hpfNipBM`) |
+| 4413 / 4416 | `stw r24,4(r19)` / `stw r18,0(r19)` | **insertar PTE** en el fallo de página (`hw_pte_miss`) |
+| 7214 | `stw r4,0(r3)` | revalidar |
+| 8275 | `stw r0,0(r3)` | invalidar (`mapInvPte32`) |
+- Técnica igual que con `stwcx.`: sustituye cada `stw` por `b stub`, y el stub hace `stw rS,d(rA) ; dcbf 0,rA ; sync ; b vuelta`. La PTE tiene 8 bytes alineados, así que `+4` está en la misma línea que `+0`. Estas rutinas corren **en modo real** (DR=0), así que `rA` es la dirección física y `dcbf` va bien.
+- **Lectura de R/C tras invalidar** (`mapInvPte32` l.8300: `lwz r5,4(r3)`, "Get the real part", justo después de `tlbsync; sync`): pon **`dcbf 0,r3 ; sync`** delante del `lwz`, para leer R/C **de memoria** y no de una copia vieja de la caché. Busca lecturas equivalentes (`lwz rX,4(rPTE)` tras un `tlbsync`) en `hpfTLBIE32`→`hpfMrgRC32` (l.4376-4390) y en `hrmPtlb32` (l.706-720), y haz lo mismo.
+- Si prefieres empezar pequeño: primero **4413/4416** (insertar) y **8275 + la lectura de 8300** (invalidar y leer R/C). Son el camino de casi todo.
+
+## 90.4 Pruebas para confirmarlo
+1. **Tu prueba de COW** (escribir, fork, el hijo escribe, 1000 veces, comprobar el padre): úsala **antes y después** del parche.
+2. **Presión de memoria con comprobación:** un programa que escribe un patrón distinto en 300-400 MB (más que la RAM libre, para forzar pageout), relee y compara, en bucle. Con R/C perdido fallará con 2 núcleos y no en UP.
+3. El heredoc/`date` de `bash` que te falló, en bucle de 200.
+- Si con el parche las tres pasan con 2 núcleos, repite el bucle `sh` de 50 000 **sin** WindowServer girando. Lo lento (15-17 s) era muy probablemente WindowServer o ScreenSaverEngine comiéndose el núcleo 0 por datos corruptos.
+
+## 90.5 Orden
+1. Parche `dcbf` en las escrituras de PTE y antes de leer R/C (90.3).
+2. Pruebas de 90.4 (COW, presión de memoria, heredoc/`date`), primero en UP y luego con 2 núcleos.
+3. Si pasan: repetir medidas (88.3) y probar el arranque SMP temprano.
+4. `shutdown -r` que no reinicia: dejarlo para después (probablemente un proceso colgado por lo mismo).
