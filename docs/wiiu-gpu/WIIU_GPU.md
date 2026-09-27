@@ -56,7 +56,8 @@
 > - **Partes 65–66** — sin congelaciones (SCR con lock). Los dos núcleos ociosos; OHCI0 **nunca llegó a `_interruptEventSource->enable()`**: `WiiOHCI::UIMInitialize` está dormido entre `addEventSource` y `enable()` (dos `IOSleep(100)` en medio). Cómo verlo: el `wait_event` del hilo (66.2).
 > - **Partes 67–68** — IOSleep no era. **Causa global probable: falta `HID0[ABE]` (0x8) en los dos núcleos** → `tlbie`, `dcbf`/`dcbi`/`dcbst`/`icbi` y `sync` **no se difunden** al otro núcleo (NetBSD lo activa para MP en Espresso). Eso deja TLB y líneas de caché viejas en el otro núcleo → DMA/E/S que nunca termina y cuelgues aleatorios. **No** actives HID4[SBE] (son BAT 4-7, explica la muerte de la Parte 45).
 > - **Partes 69–70** — con ABE el núcleo 1 ya ejecuta **procesos de usuario** y el arranque llega a la pantalla gris. La parada ahora cuadra con el **erratum lwarx/stwcx. en userland** (libSystem, CoreGraphics…, sin `dcbst`), que Linux corrige recompilando gcc/glibc. Plan: parchear los binarios de usuario **en arranque UP por SSH** con stubs dentro de su propio `__TEXT` (70.3).
-> - Si algo se contradice, vale la parte **más reciente** (70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 71–72** — el parche de userland solo cabe en el 5% de los sitios. Plan: **atar los hilos de usuario al núcleo 0** con un gancho en `thread_setrun` (72.1) y dejar el SMP para los hilos del kernel; los stubs completos, más adelante. Hilo de OHCI dormido en 0x00F98F44: **sacar su pila completa** desde su savearea (72.2).
+> - Si algo se contradice, vale la parte **más reciente** (72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -73,14 +74,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 70.6** (escáner + parcheador de stwcx. de usuario, aplicado en UP por SSH; luego SMP).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 72.5** (pila del hilo dormido; hilos de usuario atados al núcleo 0).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -4063,3 +4064,73 @@ Comparando con NetBSD (`evbppc/nintendo/machdep.c:418-425`, `cpu.c` y `oea/cpu_s
 2. Reducir la espera de `wiiSCRModify` a ~1 ms por TB y añadir las balizas al FB del camino del WAKE (70.4).
 3. Arrancar en SMP 3-4 veces. Si llega al escritorio: dos bucles `sh` en paralelo (~14 s), abrir apps y estrés de E/S (SD y red).
 4. Si sigue parándose en la pantalla gris: anillo de esperas con el SRR0 de usuario (70.2) para ver qué proceso y qué biblioteca.
+
+
+---
+
+# PARTE 71 — (informe del Mac) El parche de userland solo cabe en el 5%; smp42 se para en WiiOHCI
+
+- `tools/stwcx_userland.c`: `stwcx.` → `b stub` (`dcbst ; stwcx. ; b vuelta`), con copia `.stwcx-orig`. Verificado en libSystem (4/4; el 5.º `stwcx. r3,r6,r1` es de limpieza, sin `lwarx`).
+- 2292 binarios: **29 682 sitios en 108 binarios; solo caben 1472** (61 binarios). Las dylibs split-seg están ajustadas a página, sin relleno, y el `b` solo llega a ±32 MB.
+- smp42 (+ espera de SCR ~1 ms + userland parcial): **se para en el kernel, antes de userland**. Latte 5 enmascarado; `UIMInitialize` en el **paso 10** (`initIsoEndpoints`/entrada de `initInterruptEndpoints`).
+  - Hilo 0x02AE7200 dormido con **wait_event = 0x00F98F44** (memoria dinámica); thread+0x18 = 2.
+
+---
+
+# PARTE 72 — Respuesta: userland atado al núcleo 0 por ahora, y la pila del hilo dormido
+
+## 72.1 Pregunta 1: userland — qué hacer con los 28 000 sitios
+- **(c) `dcbst` antes del `lwarx`: no.** El apaño que funciona (linux-wiiu, `glibc-2.38-espresso.patch`) pone el `dcbst 0,rA` **inmediatamente antes del `stwcx.`**, entre `lwarx` y `stwcx.`. El erratum afecta al estado de la línea en el momento del `stwcx.`. Moverlo antes del `lwarx` no es equivalente, y no hay forma de comprobarlo salvo probando mucho. Tampoco suele haber huecos dentro del bucle.
+- **(b) agrandar `__TEXT` y reubicar split-seg:** demasiado caro y frágil.
+- **(a) dylib de stubs en el shared region:** viable **más adelante**. Crea una o varias dylibs "solo stubs", con dirección preferente en huecos del shared region de texto (0x90000000–0x9FFFFFFF) a menos de 32 MB de cada grupo de bibliotecas, y haz que se carguen en todos los procesos. Es trabajo grande.
+- **(d) solo unos binarios:** no se puede garantizar; cualquier framework con un contador de referencias o una cola puede colgar un proceso.
+- **Recomendado ahora — (e) atar los hilos de usuario al núcleo 0.** Dejas el SMP para los hilos del **kernel** (IOKit, workloops, red, disco, WindowServer en su parte de kernel), que ya tienen el erratum resuelto. El código de usuario **nunca** corre en el núcleo 1, así que el erratum de userland no aplica. Es estable, permite llegar al escritorio y medir, y separa los fallos de kernel de los de userland.
+
+**Cómo (gancho en la entrada de `_thread_setrun`, `kern/sched_prim.c:1953`):**
+- r3 = `new_thread`, con el hilo bloqueado. XNU respeta `bound_processor` en todos los caminos: `if ((processor = new_thread->bound_processor) == PROCESSOR_NULL) … else /* bound */`. Un hilo atado va a la cola **local** del procesador y el núcleo 1 nunca lo recoge.
+- Stub (usa r11/r12, que son volátiles en la entrada de una función):
+  ```
+  lwz   r11, OFF_TASK(r3)          ; thread->task
+  lis   r12, ha16(_kernel_task) ; lwz r12, lo16(_kernel_task)(r12)
+  cmpw  r11, r12 ; beq   sigue      ; hilo del kernel: no tocar
+  lwz   r11, OFF_BOUND(r3)         ; thread->bound_processor
+  cmpwi r11, 0 ; bne   sigue        ; ya atado: respetar
+  lis   r12, ha16(_master_processor) ; lwz r12, lo16(_master_processor)(r12)
+  stw   r12, OFF_BOUND(r3)         ; atar al núcleo 0
+  sigue: <instrucción desplazada> ; b _thread_setrun+4
+  ```
+- **Offsets** con `otool -tv`:
+  - `OFF_BOUND`: en `_thread_bind`, el `stw r4,N(r3)` (o el registro equivalente) que guarda `bound_processor`;
+  - `OFF_TASK`: en `_get_threadtask`, `lwz r3,N(r3)`.
+  - Símbolos `_kernel_task` y `_master_processor` (punteros globales).
+- **Cuidado:** un hilo de usuario que ya estuviera corriendo en el núcleo 1 se ata en su siguiente `thread_setrun`. Instala el gancho **antes del WAKE**, cuando aún no hay procesos de usuario.
+- **Deshaz el parche parcial de userland** (restaura los `.stwcx-orig`), o déjalo: es inocuo. Así el sistema de usuario queda como en UP, y cualquier fallo que quede es del kernel.
+
+## 72.2 Pregunta 2: qué es 0x00F98F44 — saca la pila completa del hilo dormido
+- Lo más directo no es adivinar el objeto, sino **ver quién llamó**:
+  1. Un hilo bloqueado guarda su contexto en su savearea. `thread->machine.pcb` → `save_r1` en **+0x8C** (palabra baja de `uint64_t` en +0x88) y `save_lr` en **+0x19C** / `save_srr0` en **+0x184** (`osfmk/ppc/savearea.h:95-150`).
+  2. El offset de `machine.pcb` en `struct thread` lo ves en `_cpu_signal_handler`, en la rama CHUD: `struct savearea *ssp = current_thread()->machine.pcb;` (`ppc/cpu.c:623-626`), que es un `lwz rX,N(rThread)`.
+  3. Recorre la pila desde `save_r1`: cada marco PPC tiene `[sp+0]` = marco anterior y `[sp+8]` = LR guardado. Pinta 8-10 LR y resuélvelos con `nm` del kernel y de los kexts (WiiUSB/WiiPlatform con su dirección de carga).
+  - Verás la cadena completa, por ejemplo `WiiOHCI::initInterruptEndpoints` → `IOBufferMemoryDescriptor::…` → `kmem_alloc…`/`vm_map_…` → `lock_write`/`lck_mtx_lock` → `thread_block`.
+- **Para identificar el objeto:**
+  - compara 0x00F98F44 con `*_kernel_map` (+ el offset del lock del mapa): si coincide, espera el **lock del kernel_map** (`lock_t` que duerme);
+  - compara con los `IOLock`/`IORecursiveLock` de tus drivers (gate del workloop de OHCI, locks de WiiPE);
+  - vuelca 64 bytes alrededor: un `lck_mtx` tiene el dueño (thread) dentro, y un `lock_t` tiene `want_write`/`read_count`/`waiting`.
+- **Luego, el dueño:** si es un lock con dueño, saca también **la pila del dueño**. Suele ser otro hilo esperando algo (cadena de esperas) o un hilo que corrió en el núcleo 1 con un `stwcx.` sin parchear.
+
+## 72.3 Pregunta 3: por qué va y viene
+Mecanismos que hacen que un wakeup se pierda "a veces" con dos CPU en xnu-792:
+1. **Atómicos sin el apaño efectivo.** El protocolo `assert_wait` → `thread_block` / `thread_wakeup` está protegido por locks de `wait_queue` (hw_lock: `lwarx`/`stwcx.` parcheados). Si **algún** sitio del kernel o de un kext cargado queda sin `dcbst` (o su stub está mal), el lock puede "tomarse" dos veces a la vez y la cola de espera se corrompe. Solo a veces, según el calendario.
+   - Revisa con `otool` los 142 stubs **y** busca `stwcx.` en `__TEXT` completo del kernel (no solo `__text`), en `__HIB` y en **todos los kexts cargados** (lista con `kextstat` de un arranque UP: IOUSBFamily, IOStorageFamily, IONetworkingFamily, IOHIDFamily, AppleFileSystemDriver…).
+2. **Operaciones de caché/TLB sin difundir**: ya resuelto con ABE, pero comprueba en el siguiente arranque que HID0 del núcleo 1 tiene 0x8 (lee `mfspr 1008` en su baliza de idle).
+3. **Lectura de un flag sin lock en un driver de Wiintosh** (patrón "compruebo y duermo" sin lock), por ejemplo en el asignador de WiiPE o en la espera de `waitForService`. Con un núcleo nunca se veía; con dos, a veces. La pila de 72.2 lo mostrará.
+
+## 72.4 Nota sobre userland ya parcheado
+- Los 1472 sitios parcheados son inocuos en UP y en SMP. Si activas 72.1 no hacen falta, pero tampoco molestan.
+- Si después haces la dylib de stubs (72.1.a), reutiliza tu registro `/var/log/stwcx_applied.txt` y el mismo generador de stubs.
+
+## 72.5 Orden
+1. **Pila del hilo dormido** (72.2) en el próximo arranque que se pare en OHCI: pcb → r1 → cadena de LR. Identifica el objeto de 0x00F98F44 y su dueño.
+2. **Gancho en `thread_setrun`** que ata los hilos de usuario al núcleo 0 (72.1), instalado antes del WAKE.
+3. Revisar que todo `stwcx.` del kernel y de los kexts cargados tenga su `dcbst` (72.3.1) y que HID0 del núcleo 1 tenga ABE.
+4. Arrancar 3-4 veces. Si llega al escritorio: medir (dos bucles `sh` en el kernel no se paralelizan con 72.1; prueba con E/S de disco y red, que sí usan hilos del kernel).
