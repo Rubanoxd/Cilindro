@@ -47,7 +47,8 @@
 > - **Partes 47–48** — vectores de Latte soft-disabled porque su workloop quedó asignado al **núcleo 1 en reposo (doze)** y el IPI SIGPwake no lo despierta; prueba: quitar el doze (48.3).
 > - **Partes 49–50** — sin doze el workloop sigue atascado ⇒ el núcleo 1 **no está en su bucle ocioso**. No-determinación: **carrera de wakeup perdido** en `IOCPUInterruptController::registerInterrupt` + `enabledCPUs++` (50.2). Diagnóstico con los contadores del per_proc 1 independiente de processor_start.
 > - **Partes 51–52** — IOCPU arreglado; los dos núcleos viven; solo queda Latte 5 (probablemente **OHCI0**, USB) soft-disabled. xnu no necesita IPI para recoger el hilo ⇒ el workloop está **bloqueado**, no pendiente. Diagnóstico decisivo en 52.3.
-> - Si algo se contradice, vale la parte **más reciente** (52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 53–54** — sin WiiUSB/IPC sigue igual. El bucle ocioso **no necesita IPI**; que el núcleo 1 reciba solo ~3 externas indica que **no está ocioso** (ocupado en un hilo o con la expulsión desactivada). Offsets de hwCtr/SIGP y de `struct processor` para verlo sin código nuevo (54.2). Plan B: arrancar el núcleo 1 **después** del escritorio (54.5).
+> - Si algo se contradice, vale la parte **más reciente** (54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -64,14 +65,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 52.5** (estado de vectors[5], del IES y del workloop de OHCI; PC del núcleo 1).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 54.6** (leer processor[1] + contadores SIGP; si hace falta, arranque tardío del núcleo 1).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -3360,3 +3361,84 @@ Tu idea es correcta. Añade además:
 2. Diagnóstico 52.3 (vectors[5], producer/consumer, gate/workThread, PC de los dos núcleos). Una captura basta para situarse en la tabla.
 3. Según la fila: arreglar WiiOHCI (52.4.1/2) o el protocolo (52.4.3).
 4. Contadores de IPI (52.5) en decimal, para cuando se reactive el doze.
+
+
+---
+
+# PARTE 53 — (informe del Mac) Sin log por IPC y sin WiiUSB: sigue igual
+
+- smp27 **sin WiiUSB**: se para antes, en el paso 20/21 (`WIISYSLOG("woke core…")` hace un log por IPC a IOSU con sondeo).
+- smp28 = smp27 + log por IPC desactivado desde el WAKE: igual que smp27.
+  - `processor_start(1)` y `registerInterrupt(0)` vuelven. Latido del núcleo 0 vivo.
+  - Núcleo 1: hwDecrementers avanza; **hwExternals = 3**. handleInterrupt ≈ 2–3 en cada núcleo.
+  - PI mask `0x01000010` (falta el 6), Latte mask0 `0x00000080` (falta el 5).
+- El número de vectores perdidos varía entre arranques. El núcleo 1 recibe muy pocas externas y el núcleo 0 también, pero su decrementador sí va.
+
+---
+
+# PARTE 54 — Respuesta: el núcleo 1 no está ocioso; cómo verlo con lo que XNU ya cuenta
+
+## 54.1 El bucle ocioso no espera ninguna IPI (pregunta 1)
+- `idle_thread` (xnu `kern/sched_prim.c:2537-2550`) es un **bucle de sondeo**: `while (next_thread == NULL && runq_pset == 0 && runq_local == 0) { machine_idle(); splsched(); }`. Con el doze anulado, `machine_idle` solo reactiva EE y vuelve, así que `next_thread` se consulta continuamente. No hace falta AST ni IPI.
+- **La deducción importante:** cuando el núcleo 1 está **ocioso de verdad**, está en `pset->idle_queue`. `thread_setrun` (`sched_prim.c:1985-2030`) le pasa **cualquier** hilo que despierte (cientos por segundo durante el arranque) y llama a `machine_signal_idle` → `cpu_signal(SIGPwake)`. Esto se envía porque `pf.Available` del núcleo 1 sigue teniendo `pfCanDoze` (solo anulaste la instrucción, no el bit). Con tus contadores deberías ver **muchas** externas en el núcleo 1.
+- Solo ves ~3. Así que **el núcleo 1 no está en la cola de ociosos**: está `PROCESSOR_RUNNING` con un hilo que **no suelta la CPU**. El decrementador sube, pero no hay cambio de contexto. Pasa si el hilo gira con la **expulsión desactivada** (dentro de un simple lock / `disable_preemption`), o si cada vuelta vuelve a coger lo mismo.
+- Encaja con que se pierdan vectores de forma variable: el hilo atascado en el núcleo 1 puede ser **el propio workloop** (OHCI o el del PI 6), o uno que tiene algo que ellos necesitan (un lock, el gate).
+- Y con que el núcleo 0 reciba pocas externas: sus fuentes (PI 6, Latte 5) están enmascaradas esperando al workloop; solo quedan SDHC y el decrementador.
+
+## 54.2 Verlo sin escribir código nuevo: contadores y estructuras que XNU ya mantiene
+**hwCtr** empieza en **per_proc + 0x800**. Lo he validado con tus datos: +0x814 = hwExternals, +0x824 = hwDecrementers, +0x88C = hwPreemptions y +0x890 = hwContextSwitchs, que son justo los que viste moverse (`osfmk/ppc/exception.h:152-248`).
+| Offset per_proc | Campo | Qué dice |
+|---|---|---|
+| +0x888 | hwSIGPs | señales SIGP procesadas por ese núcleo |
+| +0x88C | hwPreemptions | expulsiones |
+| **+0x890** | **hwContextSwitchs** | **si no sube en el núcleo 1, está atascado en un solo hilo** |
+| +0x990 | numSIGPast | SIGPast recibidas |
+| +0x994 | numSIGPcpureq | cpureq recibidas (timebase…) |
+| +0x99C | numSIGPwake | SIGPwake recibidas |
+| +0x9A0 | numSIGPtimo | **enviadas por ESTE núcleo** que caducaron (el destino no consumió el mensaje) |
+| +0x9A4 / +0x9A8 | numSIGPmast / numSIGPmwake | enviadas por este núcleo y **fusionadas** (no se mandó IPI) |
+| +0x9BC | numSIGPcall | SIGPcall recibidas |
+Recibidos en el per_proc del **receptor**; timo/merged en el del **emisor** (núcleo 0).
+
+**`struct processor`** del núcleo 1 (`kern/processor.h:113-122`): el `processor_t` es tu `machProcessor` del WiiCPU 1.
+| Offset | Campo |
+|---|---|
+| +0x08 | `state` (0 OFF_LINE, 1 RUNNING, 2 IDLE, 3 DISPATCHING, 5 START) |
+| +0x0C | `active_thread` |
+| +0x10 | `next_thread` |
+| +0x14 | `idle_thread` |
+| +0x1C | `current_pri` |
+
+**Interpretación:**
+- `state=1`, `active_thread ≠ idle_thread` y siempre el **mismo** puntero, `hwContextSwitchs[1]` quieto → hilo atascado. Compara ese puntero con el `workThread` del IOWorkLoop de OHCI/PI y con `gateLock->thread` (52.3). Mira `current_pri`: el workloop de un driver suele ir a 80-ish.
+- `state=3` con `next_thread` fijo → el núcleo 1 no recoge. Improbable con el bucle de sondeo; apuntaría a coherencia (54.3).
+- `state=2` y `hwContextSwitchs[1]` sube → el núcleo 1 está bien. El problema está en el hilo bloqueado (52.3).
+- En el núcleo 0: si `numSIGPmwake`/`numSIGPmast` suben mucho y `numSIGPwake[1]` no, los mensajes se fusionan porque `MPsigpStat` del 1 se quedó con `MPsigpMsgp` (46.4).
+
+## 54.3 PC del núcleo 1 y prueba de coherencia en modo virtual (pregunta 2)
+Tu idea de contar envíos y recepciones es buena. Píntalos en **decimal**, no en binario. Añade dos cosas con el **ping por SCR** (sin mensaje XNU):
+1. **PC**: en `handleInterrupt(source=1)` guarda `current_thread()` y el `save_srr0` de `current_thread()->machine.pcb` (offset con `otool` de `_interrupt`). Con el hilo atascado y EE=1 a ratos, el ping entra y te da **dónde gira**; busca el PC en `nm` del kernel y de los kexts.
+   - Si el ping **no** entra nunca, el núcleo 1 gira con EE=0. Mira entonces si el hilo tiene un simple lock: la dirección suele estar en r3 de la savearea del decrementador.
+2. **Coherencia en modo virtual**:
+   - Antes de cada ping, el núcleo 0 escribe `gPingSeq++` (variable global del kext).
+   - En `handleInterrupt(source=1)`, el núcleo 1 copia `gPingEcho = gPingSeq`.
+   - Si `gPingEcho` va siempre un número por detrás o se queda viejo, no hay coherencia en virtual.
+   - XNU mapea toda la RAM con **M=1** (`mappings.c:348`, `wimg = 0b0010`), igual que el modo real de la sonda, así que debería pasar. Pero es la única pieza de coherencia que falta verificar fuera de la sonda en modo real.
+
+## 54.4 Por qué el IPC y WiiUSB cambiaban el punto de parada
+- El log por IPC sondea un registro de IOSU con un bucle. Si otro núcleo o el propio IOSU tardan, se alarga el tiempo con EE=0 o con un lock, y cambia el orden de la carrera. Así que no es una causa: **solo cambia el calendario**.
+- Quitar WiiUSB cambia qué hilo acaba atascado en el núcleo 1, no el problema de fondo. Mantén el IPC desactivado desde el WAKE (o protégelo con un spinlock y no lo uses desde el núcleo 1).
+
+## 54.5 Dejar el núcleo 1 fuera (pregunta 3)
+- `processor_shutdown`/`processor_exit`: pasan por `cpu_sleep` → `WiiCPU::haltCPU/quiesceCPU` (TODO). **No.**
+- **Arranque tardío (recomendado como prueba):** es exactamente lo que hace XNU al despertar del reposo (`IOCPUSleepKernel`, `IOCPU.cpp:117-121`, llama a `processor_start` en caliente).
+  1. En `WiiCPU::start` del núcleo 1, **no** llames a `processor_start`. Guarda `machProcessor`.
+  2. El núcleo 0 **no** debe esperar al 1: en tu `registerInterrupt` reimplementado, quita el `while (_enabled < numCPUs)`. Esa espera solo asegura que las IPI tengan destino, y `cpu_signal` ya comprueba `SignalReady` y `running`.
+  3. Arranca el núcleo 1 más tarde desde un hilo: con un temporizador (p. ej. 180 s tras `WiiPE::start`, cuando ya hay escritorio y SSH) o bajo demanda (sysctl o propiedad de IORegistry que se cambie por SSH). Parchea la commpage MP con dcbst **antes** del WAKE, igual que ahora.
+  4. Si el sistema sigue vivo con el núcleo 1 arrancado, mide por SSH (`sysctl hw.ncpu`, `top`, pruebas de carga). Si se congela, lo hará en un estado conocido, con SSH hasta ese momento y con el diagnóstico de 54.2 en pantalla.
+- `ml_get_max_cpus` ya es 2 desde el arranque, así que la commpage MP y `hw.ncpu` se quedan como ahora.
+
+## 54.6 Orden
+1. Añadir al hilo de diagnóstico, **sin código nuevo en XNU**: `processor[1]` (+0x08/+0x0C/+0x10/+0x14/+0x1C), hwContextSwitchs de los dos núcleos y los contadores SIGP de 54.2 (recibidos en el 1; timo/merged en el 0). Una captura con dos lecturas separadas 2 s basta.
+2. Si `active_thread` del núcleo 1 está fijo: el ping de 54.3 para su PC, y compararlo con el workThread/gate de OHCI y PI.
+3. En paralelo, preparar el **arranque tardío** (54.5) como vía para llegar al escritorio y medir.
