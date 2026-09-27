@@ -66,7 +66,8 @@
 > - **Partes 85–86** — errores de la SD con 2 núcleos: el workloop (núcleo 1) corre **a la vez** que el manejador primario (núcleo 0) y la línea de nivel del SDHC sigue alta hasta que la action la limpia → **interrupciones duplicadas** que leen estado 0 o llegan sin comando. Arreglo: **leer y limpiar el estado del SDHC en un filtro** (IOFilterInterruptEventSource) y acumularlo; revertir el ack adelantado de Latte (86.2). WindowServer al 100 %: `sample` por SSH (86.4).
 > - **Partes 87–88** — con el filtro en WiiSDHC: **0 errores de SD, 23 min estables con 2 núcleos**. Queda: gcc falla a veces sin mensaje y el load sube a ~1. Siguiente: capturar **qué etapa** de gcc falla y con qué señal (88.1), `sample` de WindowServer, **probar de nuevo el arranque SMP desde el principio** (sin arranque tardío) y **medir** frente a UP antes de la dylib de stubs (88.3).
 > - **Partes 89–90** — ningún hilo de usuario corre en el núcleo 1 y aun así el userland se corrompe (salida duplicada, fichero recién creado que desaparece). Encaja con **bits R/C (Changed) de las PTE perdidos** entre núcleos: **NetBSD Espresso MP hace `dcbst` de la PTE tras cada escritura** y XNU no. Parchear las ~12 escrituras de PTE de `hw_vm.s` (+ lectura de R/C) con `dcbf` (90.2).
-> - Si algo se contradice, vale la parte **más reciente** (90 > 89 > 88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 91–92** — con `dcbf` en las PTE: **COW y stdio arreglados** (cowtest 1000/1000). Queda un SIGSEGV en la **primera** ejecución de algunos binarios y al crear ficheros nuevos. Pasos: **core dump + gdb** para ver el PC (92.1), prueba de coherencia de **`dcbz`** entre núcleos (92.2), atar el workloop de SDHC al núcleo 0 como descarte (92.3), y cambiar los 2 `dcbst` restantes a `dcbf`.
+> - Si algo se contradice, vale la parte **más reciente** (92 > 91 > 90 > 89 > 88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -83,14 +84,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 90.5** (dcbf tras escrituras de PTE en hw_vm.s + antes de leer R/C; pruebas de COW y de presión de memoria).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 92.5** (core dump del SIGSEGV; prueba de dcbz; descarte de SDHC en el núcleo 1).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -4718,3 +4719,62 @@ Todas las **escrituras de PTE** de 32 bits. Usa **`dcbf`** (en Espresso es lo qu
 2. Pruebas de 90.4 (COW, presión de memoria, heredoc/`date`), primero en UP y luego con 2 núcleos.
 3. Si pasan: repetir medidas (88.3) y probar el arranque SMP temprano.
 4. `shutdown -r` que no reinicia: dejarlo para después (probablemente un proceso colgado por lo mismo).
+
+
+---
+
+# PARTE 91 — (informe del Mac) dcbf en las PTE: COW y stdio arreglados; queda un SIGSEGV en la primera ejecución
+
+- Stubs en 9 accesos a PTE de 32 bits: `hw_rem_map` (invalidar + leer R/C), `handlePF` (invalidar, leer R/C, **insertar**), `mapInvPte32` (invalidar + leer R/C). "9 of 9 PTE accesses flushed".
+- Con 2 núcleos: `cowtest` **1000/1000**; `printf`+`cat`+`date` ×200 **200/200**. WindowServer ya no gira.
+- Queda:
+  - `cat /etc/hosts > /tmp/x1` → **139 la primera vez**, 0 las siguientes;
+  - `cat > archivo <<EOF` → 139, pero `cat <<EOF` a la terminal va bien;
+  - `cal` → 139 la primera vez y 0 la segunda;
+  - sin crash logs.
+- En el kernel solo quedan 2 `dcbst`: `_dcache_incoherent_io_store64` y `_pmap_copy_page`.
+
+---
+
+# PARTE 92 — Respuesta: primero ver el fallo; después dos pruebas que separan las causas
+
+## 92.1 Ver el PC del fallo (lo más barato)
+Sin crash log no sabemos si el que muere es el hijo de `bash` antes del `exec`, el propio `cat`/`cal`, o `dyld`. En Tiger:
+- `sudo sysctl -w kern.coredump=1`; en la shell de prueba `ulimit -c unlimited`; `sudo mkdir -p /cores && sudo chmod 1777 /cores`.
+- Reproduce (`cal` recién arrancado, o `cat … > nuevo`). Queda `/cores/core.<pid>`.
+- `gdb /usr/bin/cal /cores/core.<pid>` → `bt`, `info registers`, `x/8i $pc`. Así ves **dónde** (dyld, libSystem, el binario) y **qué dato** era basura (registro o memoria).
+- **Lectura:**
+  - si el fallo está en **código** que no coincide con el binario del disco (`x/8i $pc` distinto de `otool -tv` en la misma dirección) → problema de **caché de instrucciones** o de la página de código leída;
+  - si el código es correcto pero un **puntero** es basura → datos de una página recién puesta a cero, recién copiada o recién leída del disco;
+  - si falla con **registros absurdos** justo tras una llamada al sistema → el estado guardado del hilo (savearea).
+
+## 92.2 Prueba de coherencia de `dcbz` entre núcleos (la sospecha (a))
+- XNU usa `dcbz` en muchos sitios: `bzero.s` (17), `bcopy.s`, `movc.s` (`pmap_zero_page`/`bzero_phys`), `cswtch.s` (29) y `lowmem_vectors.s` (31: **inicializa saveareas con `dcbz`**).
+- `dcbz` crea una línea a ceros **sin leer memoria**. En un sistema coherente debe **anular (kill)** las copias del otro núcleo. Si en Espresso ese "kill" no funcionara bien (como `dcbst` no bastaba para `stwcx.`), una línea **modificada y vieja** en el otro núcleo podría escribirse más tarde encima de la página nueva: memoria recién puesta a cero con basura, o **registros de usuario guardados** con basura (SIGSEGV "al azar"), sobre todo en la primera ejecución, que es cuando más páginas nuevas se crean.
+- NetBSD Espresso MP usa `dcbz` en `pmap_zero_page` (`powerpc/pmap_subr.c:330-344`), lo que sugiere que funciona. Pero conviene **medirlo como hiciste con los atómicos**. Dos hilos atados (uno por núcleo) y una línea X alineada a 32 bytes:
+  1. el núcleo 1 escribe un patrón en X (queda modificada en su caché);
+  2. se avisa al núcleo 0 (un flag), que hace `dcbz X` y escribe un valor distinto en X+4;
+  3. los dos hacen `dcbf X; sync`;
+  4. se lee X por memoria sin caché (o se comprueba desde los dos núcleos).
+  - Esperado: ceros + el valor del núcleo 0. Si reaparece el patrón del núcleo 1, el `dcbz` **no anula** la copia remota.
+  - Haz 1 000 000 de rondas, y también al revés (el núcleo 0 escribe y el 1 hace `dcbz`).
+- **Si falla:** sustituir `dcbz` por un bucle de `stw` 0 (o por `dcbf` + `dcbz` + `sync`, si esa variante pasa la prueba) en `bzero_phys`/`pmap_zero_page`, `bcopy` y las saveareas. Son muchos sitios, pero se pueden parchear con stubs igual que los `stwcx.`.
+
+## 92.3 Descartar la ruta de la SD en el núcleo 1 (la sospecha del informe)
+- La ruta de lectura del disco **ya vacía el destino**: `IOMemoryDescriptor::writeBytes` usa `copypv(…, cppvPsnk | cppvFsnk | …)` (`IOMemoryDescriptor.cpp:1020-1021`), y `cppvFsnk` hace `flush_dcache64` del destino (`mappings.c:1671-1677`), que es `dcbf`.
+- Además, la primera vez que un proceso usa una página, `vm_fault` hace `pmap_sync_page_data_phys` → `sync_ppage` (`dcbf` + `icbi` por línea) **en el núcleo que falla** (`vm_fault.c:2396-2399`, `m->no_isync`). Con ABE, `dcbf` e `icbi` se difunden, así que en teoría la caché de instrucciones está bien.
+- **Prueba de descarte:** ata el `workThread` del IOWorkLoop de WiiSDHC (y el de OHCI) al núcleo 0 con `thread_bind` (o marcándolo en tu gancho de `thread_setrun` por puntero de hilo).
+  - Si los SIGSEGV de primera ejecución **desaparecen**, es la ruta de E/S desde el núcleo 1.
+  - Si siguen, es otra cosa (92.2 o saveareas).
+
+## 92.4 Pregunta 2: los dos `dcbst` restantes
+- Cámbialos a `dcbf` los dos. Es inocuo y quita dudas:
+  - `_pmap_copy_page`: copia de páginas para copy-on-write; el `dcbst` saca el destino hacia la caché de instrucciones;
+  - `_dcache_incoherent_io_store64`: vaciado antes de DMA de salida.
+  En Espresso `dcbst` ya se comportó mal entre núcleos en otro contexto.
+
+## 92.5 Orden (pregunta 3)
+1. Core dump + gdb del SIGSEGV (92.1).
+2. `dcbst` → `dcbf` en los dos sitios (92.4).
+3. Prueba de `dcbz` (92.2) y descarte de SDHC/OHCI en el núcleo 1 (92.3).
+4. Con el fallo entendido y resuelto, **entonces** medidas (88.3) y arranque SMP temprano. Con corrupción de memoria de por medio, las medidas no valen todavía.
