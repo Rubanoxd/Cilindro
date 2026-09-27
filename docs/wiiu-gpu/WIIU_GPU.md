@@ -46,7 +46,8 @@
 > - **Partes 45–46** — el núcleo 1 ya arranca; las interrupciones externas se congelan. Causa principal: **read-modify-write de las máscaras de Latte/PI sin spinlock** (carrera SMP → vector enmascarado para siempre). Ack del IPI en bucle como NetBSD.
 > - **Partes 47–48** — vectores de Latte soft-disabled porque su workloop quedó asignado al **núcleo 1 en reposo (doze)** y el IPI SIGPwake no lo despierta; prueba: quitar el doze (48.3).
 > - **Partes 49–50** — sin doze el workloop sigue atascado ⇒ el núcleo 1 **no está en su bucle ocioso**. No-determinación: **carrera de wakeup perdido** en `IOCPUInterruptController::registerInterrupt` + `enabledCPUs++` (50.2). Diagnóstico con los contadores del per_proc 1 independiente de processor_start.
-> - Si algo se contradice, vale la parte **más reciente** (50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 51–52** — IOCPU arreglado; los dos núcleos viven; solo queda Latte 5 (probablemente **OHCI0**, USB) soft-disabled. xnu no necesita IPI para recoger el hilo ⇒ el workloop está **bloqueado**, no pendiente. Diagnóstico decisivo en 52.3.
+> - Si algo se contradice, vale la parte **más reciente** (52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -63,14 +64,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 50.6** (arreglar la carrera de IOCPU + diagnóstico del núcleo 1 que no dependa de processor_start).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 52.5** (estado de vectors[5], del IES y del workloop de OHCI; PC del núcleo 1).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -3290,3 +3291,72 @@ Lanza el hilo de diagnóstico **antes** de `processor_start(1)`, por ejemplo des
 2. Hilo de diagnóstico lanzado antes de `processor_start(1)` con hwExternals/hwDecrementers del núcleo 1, cpu_flags, MPsigpStat, ping por SCR y PC + hilo de la última interrupción del núcleo 1 (50.3).
 3. Arrancar y, según el PC, seguir 50.4.
 4. Mantener doze anulado hasta que el núcleo 1 funcione. Después, reactivarlo y comprobar si la ICI despierta de doze (48.1).
+
+
+---
+
+# PARTE 51 — (informe del Mac) Contador atómico aplicado; solo falta el vector 5 de Latte
+
+- `WiiCPUInterruptController`: `_enabled` con OSIncrementAtomic; `registerInterrupt` con `while (_enabled < numCPUs) IOSleep(1)`; el secundario solo hace `enableCPUInterrupt`. `ml_install_interrupt_handler` se resuelve por la tabla de símbolos.
+- smp27: `processor_start(1)` ✓ y `registerInterrupt(0)` ✓, ahora siempre.
+  - Núcleo 0 vivo. Núcleo 1 vivo: hwDecrementers sube; hwExternals ≈ 12.
+  - PI mask = normal (`0x01000050`).
+  - **Latte mask0 = `0x00000080`: falta el vector 5** (en UP, `0x000000A0`). Se queda en la manzana, sin red.
+
+---
+
+# PARTE 52 — Respuesta: el workloop del vector 5 no está esperando CPU, está bloqueado
+
+## 52.1 ¿Qué dispositivo es el vector 5? (pregunta 3)
+- Latte mantiene la numeración de Hollywood para los periféricos AHB. OpenBIOS (`arch/ppc/wii/tree.fs`) usa: **4 = EHCI (0x0D040000), 5 = OHCI0 (0x0D050000), 6 = OHCI1 (0x0D060000), 7 = SDHC (0x0D070000), 8 = SDIO (0x0D080000)**, 2 = AES, 3 = SHA, 30 = IPC.
+- La máscara de referencia `0xA0` = vectores **5 (OHCI0, USB 1.1)** y **7 (SDHC)**. Así que lo que se pierde es **el USB**, que lo gestiona `WiiOHCI` con un `IOFilterInterruptEventSource`.
+  - Si el disco del sistema o la red van por USB, el arranque se queda esperando E/S. Eso encaja con la manzana y la falta de red.
+- **Confírmalo** en un arranque UP: `ioreg -l -w0 | grep -B2 -A12 'usb@d050000'` y mira `interrupts`. Mira también en `ioreg -l -p IOService` de qué controlador cuelga el disco raíz (`df /` → `disk0s…` → IOUSBMassStorage…).
+
+## 52.2 En xnu-792 nada depende de una IPI para recoger el hilo (pregunta 1)
+- Con el doze anulado, `idle_thread` (`sched_prim.c:2537`) consulta **en bucle** `processor->next_thread`, la cola del pset y la del procesador. Las colas del procesador solo se usan para hilos ligados a él (`bound_processor`); el resto va a la cola del **pset**, compartida.
+- Si el workloop es ejecutable, **uno de los dos núcleos lo ejecuta en microsegundos**, sin IPI.
+- SIGPast solo hace falta para **expulsar** un hilo de menor prioridad que esté corriendo. Sin IPI, esa expulsión llega igualmente al vencer el quantum (decrementador, ~10 ms), y el decrementador del núcleo 1 funciona.
+- **Conclusión:** el hilo del workloop de OHCI **no es ejecutable**. Está dormido esperando algo (gate, evento, mutex) o está corriendo sin fin dentro del driver. No es un problema del planificador ni de las IPI.
+
+## 52.3 Diagnóstico decisivo: 4 lecturas desde tu hilo de diagnóstico
+Son objetos tuyos (osx-drivers), así que puedes leerlos directamente; guarda punteros globales al arrancar:
+1. **`LatteInterruptController::vectors[5]`** (`vectors` es `protected` en `IOInterruptController`): `interruptActive`, `interruptDisabledSoft`, `interruptDisabledHard` (los tres son `volatile char`, `IOInterruptController.h:40-52`).
+2. **IES de OHCI** (`WiiOHCI::_interruptEventSource`): `producerCount` y `consumerCount` (`protected` en `IOInterruptEventSource.h:76-82`; declara una subclase vacía con un accesor, o léelos por offset), `autoDisable`, `explicitDisable`.
+3. **Workloop de OHCI** (`getWorkLoop()`; `protected` en `IOWorkLoop.h:82-116`): `workToDo`, `workThread` y el **dueño del gate**. `gateLock` es un `IORecursiveLock*` = `{ lck_mtx_t *mutex; thread_t thread; UInt32 count; }` (`IOLocks.cpp:80`), así que lee `gateLock->thread` y `gateLock->count`.
+4. **PC del núcleo 1 y del núcleo 0**: el ping por SCR de 50.3 guarda `current_thread()` y `save_srr0` en `handleInterrupt(source=1)`. Para el núcleo 0 lo mismo en cualquier interrupción externa suya.
+
+**Tabla de interpretación:**
+| Lo que ves | Significa | Siguiente paso |
+|---|---|---|
+| producer > consumer, `workToDo=1`, `gateLock->thread == 0` | el hilo del workloop no se despertó o no se planifica | lee `workThread` → `state`/`wait_event` (52.4) |
+| `gateLock->thread == X` ≠ `workThread` | **otro hilo tiene el gate** y el workloop espera en `closeGate` | ¿dónde está X? Si es el `current_thread()` del ping del núcleo 1, mira su PC: está girando con el gate cogido |
+| `gateLock->thread == workThread` | el workloop está **dentro de la action** (`WiiOHCI::handleInterrupt`) y no vuelve | el PC del núcleo 1 (o del 0) cae dentro de WiiOHCI: es un bucle del driver |
+| producer == consumer, Soft=0, **Hard=1** | `enableInterrupt` se ejecutó pero `enableVector` se perdió | carrera en el protocolo Soft/Hard (52.4) |
+| producer == consumer, Soft=1 | `enable()` no se llamó (`explicitDisable`) o se deshabilitó después | revisa llamadas a `disable()`/`disableInterrupt` del driver |
+
+## 52.4 Hipótesis por orden, con lo que ya se sabe
+1. **Carrera filtro (núcleo 0) ↔ UIM/action (núcleo 1) en WiiOHCI.** Con un núcleo, el filtro solo podía *interrumpir* al código del gate; ahora **corre a la vez**. Estado compartido sin lock completo:
+   - `_intWriteDoneHead`/`_intRootHubStatus` (flags sin lock, `WiiOHCI_Interrupts.cpp:134/243`);
+   - el recorrido de la done queue y de los TD en el **filtro** (`:62-134`, `getTransferFromPhys`, `currTransfer->…`) mientras la action o la UIM desenlazan o liberan TDs en el núcleo 1 (`completeFailedEndpointGenTransfers`, `removeEndpointTransfers`, `returnTransfer`).
+   - Un TD reutilizado mientras el filtro lo recorre puede dejar una lista circular: la action gira eternamente con el gate cogido (fila 3 de la tabla).
+   - **Arreglo:** que el filtro solo lea `HcDoneHead`/estado, lo apunte y reconozca, y que **todo** el recorrido de TDs se haga en la action (bajo el gate). O proteger las listas con un spinlock que usen filtro, action y UIM (`IOSimpleLockLockDisableInterrupt`).
+2. **Espera activa con el gate cogido**: `completeFailedEndpointGenTransfers` (`WiiOHCI_Descriptors.cpp:760-763`) borra SOF y hace `while (!(IntStatus & SOF)) IODelay(10)`. Si el filtro del núcleo 0 borra SOF justo después (`WiiOHCI_Interrupts.cpp:152-156`, cuando SOF está habilitada en IntEnable), el bucle espera al siguiente frame. Si además la interrupción SOF queda deshabilitada y el bit no vuelve a subir, se queda girando. Es menos probable, pero la fila 3 lo mostraría con el PC en ese bucle.
+3. **Protocolo Soft/Hard (fila 4)**: es seguro si `sync` es barrera completa entre núcleos: `IOInterruptController::enableInterrupt` hace `Soft=0; sync;` antes de leer `interruptActive`, y tu `handleInterrupt` hace `Active=1; sync;` antes de leer `Soft`. Comprueba que **tu** versión de Latte `handleInterrupt` (con el maskLock) conserva el `sync()` entre `interruptActive = 1` y la lectura de `interruptDisabledSoft`, y que `interruptActive = 0` va **después** de `disableVectorHard`.
+4. **Lost wakeup en IOWorkLoop**: revisado, `threadMain` y `signalWorkAvailable` (`IOWorkLoop.cpp:248-332`) usan `workToDoLock` correctamente, así que es poco probable. Si la fila 1 lo muestra, lee el `wait_event` del `workThread`. Busca en los primeros 0x100 bytes del `struct thread` la dirección `&workloop->workToDo`: si está y `workToDo == 1`, es un wakeup perdido.
+
+## 52.5 Cómo comprobar si tus signalCPU generan el ICI (pregunta 2)
+Tu idea es correcta. Añade además:
+- `sent[1]`: envíos a 1 (en `signalCPU`, dentro del lock, tras la `mtspr`).
+- `seen[1]`: veces que `handleInterrupt(source=1)` ve el bit 19.
+- `spurious[1]`: entradas a 0x1700 en el núcleo 1 **sin** el bit.
+- `MPsigpStat` del per_proc 1 (si `MPsigpMsgp` se queda fijo, un mensaje no se consumió).
+- Píntalos en **decimal** (no por potencias de 2).
+- `sent ≈ seen` → las IPI funcionan. `sent ≫ seen` sin `MPsigpMsgp` fijo → se fusionan (normal). `sent ≫ seen` con `MPsigpMsgp` fijo → ICI perdida.
+- Con el doze anulado esto **ya no explica** el bloqueo (52.2), pero conviene saberlo antes de reactivar el doze.
+
+## 52.6 Orden
+1. Confirmar que el vector 5 = OHCI0 (ioreg en UP) y por qué controlador va el disco raíz.
+2. Diagnóstico 52.3 (vectors[5], producer/consumer, gate/workThread, PC de los dos núcleos). Una captura basta para situarse en la tabla.
+3. Según la fila: arreglar WiiOHCI (52.4.1/2) o el protocolo (52.4.3).
+4. Contadores de IPI (52.5) en decimal, para cuando se reactive el doze.
