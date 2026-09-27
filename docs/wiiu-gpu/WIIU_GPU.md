@@ -63,7 +63,8 @@
 > - **Partes 79–80** — `dcbf` cubre también las ventanas con `lwz`/`stw`/`eieio`. Ahora hay una **tormenta de SIGP** (7-17 mil/s) con cambios de contexto normales: es un **livelock** (un hilo que reintenta sin fin: `mutex_pause`, `lock_try`, `thread_block` en bucle), no un fallo de las IPI. Hay que **cazar el hilo caliente** (80.3).
 > - **Partes 81–82** — ¡**escritorio con 2 núcleos reales** (arranque tardío, tormenta resuelta quitando pfCanDoze)! Fallan procesos de usuario (segfault en sudo, sshd muere). Sospechoso principal: **XNU no hace `tlbsync`** porque Espresso no tiene `pfSMPcap` → activar `pfSMPcap` en `pf.Available` **y en SPRG2** de los dos núcleos (82.2). Verificar que ningún hilo de usuario corre en el núcleo 1 (82.3).
 > - **Partes 83–84** — con `pfSMPcap`/`tlbsync`, **2 núcleos estables >10 min con SSH**; sin SIGSEGV. Quedan: un `cp` con EIO y un load ~3 subiendo sin CPU. En xnu el load cuenta **hilos ejecutables** (`pset->run_count`, atómico), no esperas: o hay una **fuga de `hw_atomic_add/sub`** o hilos ejecutables que nadie recoge (84.1). EIO: primero mirar los mensajes de WiiSDHC en system.log (84.2).
-> - Si algo se contradice, vale la parte **más reciente** (84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 85–86** — errores de la SD con 2 núcleos: el workloop (núcleo 1) corre **a la vez** que el manejador primario (núcleo 0) y la línea de nivel del SDHC sigue alta hasta que la action la limpia → **interrupciones duplicadas** que leen estado 0 o llegan sin comando. Arreglo: **leer y limpiar el estado del SDHC en un filtro** (IOFilterInterruptEventSource) y acumularlo; revertir el ack adelantado de Latte (86.2). WindowServer al 100 %: `sample` por SSH (86.4).
+> - Si algo se contradice, vale la parte **más reciente** (86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -80,14 +81,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 84.4** (run_count frente a hilos TH_RUN; tortura de add/sub/CAS; logs de WiiSDHC).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 86.5** (filtro en WiiSDHC + estado acumulado; revertir ack de Latte; `sample` de WindowServer).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -4521,3 +4522,67 @@ Por orden de valor:
 2. `grep -i "sdhc\|without interrupt\|inhibit\|I/O error" /var/log/system.log` del arranque con EIO (84.2). Si es "without interrupt": reconocer la causa de Latte antes de despachar.
 3. Repetir el estrés 15-30 min y vigilar `sysctl vm.loadavg`.
 4. Después, la dylib de stubs (72.1.a).
+
+
+---
+
+# PARTE 85 — (informe del Mac) Errores de E/S de la SD con dos núcleos; el ack adelantado no basta
+
+- Log de smp52: `Command completed without interrupt? 0xA`, `disk0s4: I/O error`, `No command?: 0x8`, `No command?: 0x2`, `Command data without interrupt? 0x0` (varias veces por segundo).
+- WindowServer (y Finder) en R; **WindowServer al 100 %** en smp52 (no en smp53). El load ~3 salía de ahí. `gcc` falló escribiendo en `/var/tmp`.
+- smp53: W1C de la causa de Latte **antes** de despachar → **sigue igual** (EIO a ~1 min).
+
+---
+
+# PARTE 86 — Respuesta: interrupciones de nivel atendidas dos veces; hay que limpiar el SDHC en el contexto primario
+
+## 86.1 Preguntas 1 y 2: no es un tiempo límite ni la falta de IPI
+- `doAsyncIO` **no espera con tiempo límite**: es una máquina de estados que **solo avanza en cada interrupción** (`WiiSDHC_Commands.cpp:225-437`). Los mensajes significan **"me ha llegado una interrupción cuyo estado no cuadra con mi estado"**, no "se me acabó el tiempo".
+- Sin `pfCanDoze`, `machine_signal_idle` no manda IPI, pero **no hace falta**: con el doze anulado, `idle_thread` **sondea** `next_thread` y las colas en bucle (`sched_prim.c:2537-2550`; `machine_idle` solo reactiva EE y vuelve). El hilo despertado se recoge en microsegundos. No es la causa.
+- Descodificación del estado normal del SDHC (SD Host Controller spec): bit 0 = **CommandComplete (0x1)**, bit 1 = **TransferComplete (0x2)**, bit 3 = **DMAInterrupt (0x8)**.
+  - `0xA` en estado Cmd = llegan "datos listos" pero **el CommandComplete ya lo consumió otra ejecución de la action**;
+  - `0x0` = una action que se ejecuta **sin estado pendiente**;
+  - `No command? 0x8/0x2` = action **después** de que el comando se diera por terminado.
+  - Todo apunta a **acciones de más**: la misma interrupción del dispositivo se atiende dos veces, o la action corre antes de tiempo.
+
+## 86.2 El mecanismo con dos núcleos
+Cadena actual (`WiiSDHC.cpp:99-103`: `IOInterruptEventSource` **sin filtro**; `WiiSDHC_Private.cpp:15-33`: la action lee `NormalIntStatus`, hace el W1C y procesa):
+1. El SDHC sube su línea (de **nivel**) → Latte → PI → **núcleo 0**, manejador primario: `IOInterruptEventSource::disableInterruptOccurred` → `disableInterrupt` (**Soft**) + `producerCount++` + `signalWorkAvailable`.
+2. Con dos núcleos, **el workloop corre en el núcleo 1 a la vez**, mientras el núcleo 0 aún está en el manejador de Latte. Hasta que la action hace el W1C del SDHC, **la línea sigue alta**.
+3. Latte vuelve a enganchar la causa: con tu ack adelantado **enseguida**; con el ack al final, porque la línea sigue alta. El vector se enmascara tarde: el `Hard` solo se pone en la **siguiente** interrupción que encuentra `Soft = 1`.
+4. Cuando la action termina y la IES llama a `enable()`, la causa pendiente dispara **otra** interrupción → `producerCount++` → **otra action**, que lee un estado ya limpiado (`0x0`), o parcial (`0xA` sin el 0x1), o llega cuando `_currentCommand` ya es NULL ("No command?").
+- En UP casi no pasa: la action corre **después** de que el manejador primario vuelva, y la IES agrupa varias interrupciones en **una** action (`checkForWork` llama una vez con `count`). Con dos núcleos la action se adelanta y las repeticiones se convierten en actions separadas.
+
+**Arreglo (en WiiSDHC):**
+1. Cambia a **`IOFilterInterruptEventSource`** (como WiiOHCI). En el **filtro**, que corre en el núcleo 0 en contexto de interrupción:
+   ```cpp
+   bool WiiSDHC::filterInterrupt(IOFilterInterruptEventSource *) {
+     UInt32 st = readReg32(kSDHCRegNormalIntStatus);
+     if (st == 0) return false;                  // espuria: ni action ni nada
+     writeReg32(kSDHCRegNormalIntStatus, st);    // W1C aquí: baja la línea YA
+     OSBitOrAtomic(st, &_pendingIntStatus);      // acumular (atómico del kernel, con dcbf)
+     return true;
+   }
+   ```
+2. En la **action**: `st = OSBitAndAtomic(0, &_pendingIntStatus)` (lee y pone a 0). **Si `st == 0` → return** (sin error). Si no, `doAsyncIO(st)`.
+3. Haz la máquina de estados **tolerante al orden**:
+   - en el estado Cmd, si ya vino CommandComplete antes (guárdalo en el comando) y ahora llegan 0x2/0x8, sigue adelante;
+   - en DataTx, ignora un `st` sin bits de datos en vez de dar EIO;
+   - "No command?" → solo registra y limpia, no es error.
+4. **Revierte el ack adelantado de Latte** (vuelve al W1C **después** de los manejadores). Para fuentes de nivel, el orden correcto es: el filtro limpia el dispositivo → la línea baja → Latte limpia su causa. Así la causa no se vuelve a enganchar. NetBSD reconoce el PI **después** (`pic_pi.c: pi_ack_irq`) y enmascara la fuente activa entre medias (`actmask`).
+- Con esto la action ya no depende del momento en que corra ni del núcleo.
+
+## 86.3 Revisa OHCI con el mismo criterio
+WiiOHCI ya usa filtro. Comprueba que su filtro hace el W1C de `HcInterruptStatus` **dentro del filtro** para todos los bits que atiende, y que la action tolera estado vacío (smp33-40 tuvieron cosas parecidas).
+
+## 86.4 WindowServer al 100 % (smp52)
+- Mira qué hace: por SSH, **`sudo sample 64 5`** (Tiger trae `sample`). Da la pila de cada hilo de WindowServer.
+  - Si gira en la SD (reintentos de E/S), se arregla con 86.2.
+  - Si gira en un spinlock (`_COMM_PAGE_SPINLOCK_*`, `ev_lock`) o en un bucle de CoreGraphics/WiiGX2GA esperando un valor (fence de la GPU, contador compartido con WiiGX2Accel), apúntalo. Puede ser memoria compartida entre el kernel (en el núcleo 1) y WindowServer (en el núcleo 0) con una espera que depende de caché o de un atómico sin cubrir en CoreGraphics (solo 4/20 sitios parcheados).
+- La memoria compartida del cursor de IOGraphics (`cursorSema`) usa los spinlocks de la **commpage** en userland (`IOKitUser/IOSharedLock.s` → `_COMM_PAGE_SPINLOCK_*`, ya con `dcbf`) y `hw_lock_try` en el kernel. Esa parte debería estar bien.
+
+## 86.5 Orden
+1. WiiSDHC con filtro + estado acumulado + máquina tolerante (86.2); revertir el ack adelantado de Latte.
+2. Revisar el filtro de OHCI (86.3).
+3. Estrés 30 min (dd/cp/cmp, gcc) y `grep WiiSDHC /var/log/system.log`.
+4. Si WindowServer vuelve a girar: `sample` (86.4).
