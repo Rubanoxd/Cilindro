@@ -42,7 +42,8 @@
 > - **Parte 40** — **0x1700 es la IPI de Espresso** (NetBSD `EXC_IPI`): redirigir el vector de XNU con 1 instrucción; `sync_cache64` para memoria baja; **orden actualizado (40.4)**.
 > - **Partes 41–42** — el núcleo 1 entra en XNU pero se cuelga en `cpu_sync_timebase`: **handshake por memoria sin coherencia**; valores HID de Nintendo en el trampolín, sonda de coherencia barata, orden 42.6.
 > - **Parte 43** — rutina de Nintendo 0x240–0x330 confirmada: HID por núcleo = los de 42.6; no hay init de L2 en ese tramo.
-> - Si algo se contradice, vale la parte **más reciente** (43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 43b–44** — la coherencia la activan **CAR/BCR**; el núcleo 1 corrompe o se atasca porque `init750nb` le enciende la L1 **sin invalidar** y `cacheInit` escribe esa basura a memoria. Solución: `pfHID0` y `pfl2cr` del núcleo 1 parcheados (44.3).
+> - Si algo se contradice, vale la parte **más reciente** (44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -59,14 +60,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 42.6** (sonda de coherencia → HID de Nintendo en el trampolín → reintentar).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 44.5** (parchear pfHID0/pfl2cr del per_proc del núcleo 1 → reintentar).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -2949,3 +2950,80 @@ Es lo mismo que hace NetBSD, pero sin copiar código.
 - 0x2F4–0x330: MMCR0 = MMCR1 = 0, comprobación de la base sacada de THRM3 (bucle infinito si falla), punteros a su estructura, SPRG0 = 0.
 - **No hay init de L2** en este tramo. Está en 0x314/0x480/0x5E4 (**no hace falta** para el paso 42.6: el núcleo 1 arranca con L2CR = 0).
 - El paso 6 de 42.6 queda cumplido.
+
+
+---
+
+# PARTE 43b — (informe del Mac) La coherencia la activan CAR/BCR; el núcleo 1 se atasca en XNU
+
+- Sonda 42.4 en caliente. Registros del núcleo 0: HID0 `0x0011C064`, HID2 `0`, HID4 `0x80000000`, HID5 `0xC0000000`, L2CR `0x80000000`.
+- Solo con los HID de Nintendo en el núcleo 1 **no** hay coherencia en ningún sentido (ni con L2MUM/CCFI en el núcleo 0).
+- **Con CAR |= 0xFC100000 y BCR = 0x08000000 en el núcleo 0 hay coherencia completa en los dos sentidos.** WiiPE ya los pone al arrancar con SMP.
+- Arranque SMP:
+  1. L1 del núcleo 1 invalidada y activa en el trampolín: el núcleo 1 entra en XNU, pero la memoria se corrompe (pilas libres con `0x55555555` → panic en `stack_alloc`).
+  2. L1 del núcleo 1 apagada: no llega a `initCPU`. Tras 15 s el núcleo 0 sigue, pero no vuelve a recibir interrupciones externas y la rueda se congela.
+- Los hilos de `IOCreateThread` en `WiiInterruptController::start` también daban panic en `stack_alloc`; se han quitado.
+
+---
+
+# PARTE 44 — Respuesta: `init750nb` enciende la L1 del núcleo 1 con basura
+
+## 44.1 El orden real en xnu-792 (`osfmk/ppc/start.s` y `machine_routines_asm.s`)
+Secuencia de `_start_cpu` → `allstart` en el núcleo 1:
+1. Busca el PVR en la tabla y llama a `ptInitRout` en `doOurInit`. Para el 750 no es el primer arranque, así que usa **`init750nb`**:
+   ```
+   lwz   r11,pfHID0(r30)   ; HID0 del maestro = 0x0011C064 (ICE|DCE)
+   sync ; mtspr hid0,r11 ; isync ; sync ; blr
+   ```
+   Esto enciende ICE/DCE **sin ICFI/DCFI**, así que la L1 del núcleo 1 arranca con etiquetas aleatorias, incluidas **líneas "sucias"**.
+2. Después `cacheInit`: lee HID0 (r9). Si ICE o DCE están activos, **vacía la L1 por software**: `cisnlck` lee 1,5 × tamaño de L1 desde `0xFFF00000`.
+   - Leer de `0xFFF00000` no hace daño: en la Wii U es el espejo de MEM0/SRAM y solo se lee.
+   - El daño lo hace el **desalojo**: cada línea sucia de basura se escribe en su dirección física aleatoria. Ese es el `0x55555555` en las pilas del caso 1, y lo que en el caso 2 puede tocar código o datos compartidos.
+   - Luego apaga la L1, la invalida y la **enciende bien** (ICE|DCE|ICFI|DCFI). A partir de ahí la L1 es correcta.
+3. L2 en `cacheInit`: si L2CR (hardware) es 0 va a `ciinvdl2` con r3 = `pfl2cr`. **Si `pfl2cr == 0`, deja la L2 apagada y termina**; si no, la invalida con el valor del maestro.
+4. `hw_setup_trans` / `hw_start_trans`, luego `ppc_init_cpu` → `cpu_init` → `PE_cpu_machine_init` (→ `initCPU(true)`), y `slave_main`.
+
+**Por qué el caso 1 también se corrompía** aunque tu trampolín invalidara la L1: `init750nb` vuelve a escribir HID0 sin tocar ICFI/DCFI, y las líneas que el trampolín dejó sucias antes de que XNU conozca el mapa se escriben en `cacheInit`. Además, el valor de HID0 lo decide XNU, no tu trampolín.
+
+## 44.2 Por qué el caso 2 congela al núcleo 0 (hipótesis coherente)
+- `cacheInit` coge **`tlbieLock`** (lwarx/stwcx.) y lo suelta con un `stw` normal al final.
+- Si la basura escrita en el paso 2 cae sobre código o datos del núcleo 1 (o sobre el propio lock, o sobre un `tlbie` en curso), el núcleo 1 se queda colgado **con `tlbieLock` cogido**.
+- El núcleo 0 hace `tlbie` con ese lock y con **interrupciones apagadas** (`hw_rem_map`, `mapping_*`, `hw_protect`). Se queda girando para siempre: no hay más interrupciones externas ni panic. Encaja con tu contador a 0.
+- **Comprobación barata:** tras los 15 s de `cpuFailedToStart`, lee `tlbieLock` desde el kext. Es una palabra en memoria baja (busca el símbolo `_tlbieLock` o la dirección absoluta `li r5,tlbieLock` en `cacheInit`). Si vale ≠0, confirmado.
+- No es un problema de `tlbsync`: sin `pfSMPcap`, XNU no lo emite y tampoco es obligatorio en el 750 (NetBSD sí lo usa en Espresso MP, pero eso no cuelga).
+
+## 44.3 Solución (pregunta 1): parchear el per_proc del núcleo 1 antes del WAKE
+Es mejor que parchear `cacheInit`, porque el kernel queda intacto:
+- `pf.pfHID0` del núcleo 1 = `0x0011C064 & ~0x0000C000` = **`0x00110064`** (sin ICE/DCE).
+  - Así `init750nb` no enciende la L1, `cacheInit` ve r9 sin ICE/DCE, **se salta el vaciado por software** y hace el invalidar + encender limpio.
+- `pf.l2cr` del núcleo 1 = **0** (y `pf.l2crOriginal` = 0). Así `cacheInit` deja la L2 del 1 apagada.
+  - La L2 del núcleo 1 es de **2 MB**, no de 512 KB como la del 0 (`L2SIZ` distinto), así que copiar el L2CR del 0 sería incorrecto de todas formas. Se activa después en caliente, con invalidación y el tamaño correcto.
+- Trampolín: HID de Nintendo con la **L1 apagada** (tu caso 2) y sin dejar nada en caché.
+- Los per_proc de los secundarios se crean en `cpu_per_proc_alloc` / `cpu_start` y `pf` se copia del maestro. Parchéalos **en `startCPU` (justo antes del WAKE)**, con el puntero `per_proc` que ya tienes para el ResetHandler, y haz `sync_cache64` de la línea.
+
+**Offsets** (no hay cabecera pública de `per_proc_info`). Sácalos del `mach_kernel` con `otool -tv` en la Wii U:
+- `pfHID0`: busca `init750nb`, la secuencia `lwz r11,N(r30)` / `sync` / `mtspr 1008,r11` / `isync` / `sync` / `blr`. N es el offset. Aparece varias veces: coincide con `init750FXnb` (`lwz r13,N(r30)`).
+- `pfl2cr`: en `cacheInit`, justo después de `mfspr r8,1017` va `lwz r3,N(r12)`.
+- `pfl2crOriginal`: en `init750` (primer arranque) hay dos `stw r13,…(r30)` seguidos tras `mfspr r13,1017`; el primero es `l2crOriginal` y el segundo `l2cr`.
+- Verifícalos leyendo el per_proc del maestro: `pfHID0` debe valer `0x0011C064` y `pfl2cr` `0x80000000`.
+
+## 44.4 Otras dependencias del 750 en `_start_cpu` (pregunta 2)
+| Punto | ¿Afecta a Espresso? |
+|---|---|
+| MSSCR0 / flush por hardware (`pfL1fab`, `pfL2fab`, `pfLClck`) | No: el 750 no tiene esos bits en la tabla, así que usa el camino por software |
+| "ROM" en `0xFFF00000` (vaciado de L1 y L2) | Solo si la L1/L2 ya está activa al entrar. Con 44.3 no se usa |
+| `tlbieLock` + 128 `tlbie` | Sí, es la zona de riesgo (44.2); con la L1 limpia debería ir bien |
+| AltiVec / `dssall` | No (no hay `pfAltivec`) |
+| `init750` (primer arranque) lee L2CR/HID0 | Solo en el maestro |
+| Térmico (`ml_thrm_init`, THRM1-3) | No lo llama `_start_cpu`. **No tocar THRM3** (Nintendo lo usa como puntero) |
+| `ppc_init_cpu`: SCOM/GUS | Solo en 64 bits |
+
+## 44.5 Diagnóstico y orden (pregunta 3)
+Primero sin parchear código:
+1. Parchear `pfHID0 = 0x00110064` y `pfl2cr = pfl2crOriginal = 0` en el per_proc del núcleo 1 antes del WAKE (44.3). Trampolín con HID de Nintendo y L1 apagada.
+2. Si sigue sin llegar a `initCPU`: a los 15 s lee `tlbieLock` y el `per_proc` del núcleo 1 desde el núcleo 0. XNU guarda datos útiles ahí, como `cpu_flags` y el estado de `hw_start_trans`/`SDR1`. Lee también la marca del trampolín.
+3. Solo si hace falta, pinta cuadrados: parcha **en `WiiPE::start`** 3 o 4 puntos con `b` a stubs en `__HIB,__text` que escriban un color en el framebuffer físico (`0x8F000000`, modo real, sin caché → `stw` + `dcbf` no hace falta con la L1 apagada; con la L1 activa usa `dcbst`) y vuelvan.
+   - Puntos: entrada de `cacheInit`, tras `cinoSMP` (lock suelto), tras `hw_start_trans` y la entrada de `ppc_init_cpu`.
+   - Los stubs no deben usar la pila (r0/r2/r3 ya salvados en SPRG o en registros libres de ese punto).
+4. Cuando llegue a `initCPU`, recuerda que `cpu_sync_timebase` ya tiene coherencia gracias a CAR/BCR (43b).
+5. Después: activar la L2 de 2 MB del núcleo 1 en caliente (invalidar, `L2SIZ` correcto, L2E).
