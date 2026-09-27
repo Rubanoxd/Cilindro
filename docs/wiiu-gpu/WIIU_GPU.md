@@ -54,7 +54,8 @@
 > - **Partes 61–62** — el panic del núcleo 1 lo causaba el ping (la Parte 60 queda descartada). Con el núcleo 1 vivo, PI y Latte mask0 = 0: **no es un enrutado al núcleo 1**, es que el arranque se para **antes** de que ningún driver habilite interrupciones. Además, el filtro `Busy|Pass` puede **perder IPI reales** (62.2). Balizas de progreso de drivers (62.4).
 > - **Partes 63–64** — congelación temprana intermitente tras el WAKE. El filtro por Busy no puede bloquear. Hay que ver el camino sin depender de hilos: **balizas que pintan directamente en el framebuffer** (64.2). Quitar escrituras de SCR sin lock y el bucle de ack sin límite (64.3).
 > - **Partes 65–66** — sin congelaciones (SCR con lock). Los dos núcleos ociosos; OHCI0 **nunca llegó a `_interruptEventSource->enable()`**: `WiiOHCI::UIMInitialize` está dormido entre `addEventSource` y `enable()` (dos `IOSleep(100)` en medio). Cómo verlo: el `wait_event` del hilo (66.2).
-> - Si algo se contradice, vale la parte **más reciente** (66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 67–68** — IOSleep no era. **Causa global probable: falta `HID0[ABE]` (0x8) en los dos núcleos** → `tlbie`, `dcbf`/`dcbi`/`dcbst`/`icbi` y `sync` **no se difunden** al otro núcleo (NetBSD lo activa para MP en Espresso). Eso deja TLB y líneas de caché viejas en el otro núcleo → DMA/E/S que nunca termina y cuelgues aleatorios. **No** actives HID4[SBE] (son BAT 4-7, explica la muerte de la Parte 45).
+> - Si algo se contradice, vale la parte **más reciente** (68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -71,14 +72,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 66.5** (pasos de UIMInitialize + wait_event del hilo + temporizadores por núcleo).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 68.6** (HID0[ABE] en los dos núcleos + pfHID0; después volver a probar).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -3903,3 +3904,75 @@ Los temporizadores son **por procesador**. Hay dos candidatos concretos:
 2. `wait_event`/`state`/`last_processor` de ese hilo (66.2 paso 2).
 3. Si es `clock_delay_until`: estado de los relojes por per_proc y de la cola de `timer_call` (66.3). En paralelo, la prueba `IODelay` (66.4).
 4. Arreglado esto, prueba de paralelismo (dos bucles `sh`) y 62.4 para el resto de drivers.
+
+
+---
+
+# PARTE 67 — (informe del Mac) smp39/40: IOSleep no era; siempre acaba en "dos núcleos ociosos esperando"
+
+- smp39 (`IOSleep(100)` → `IODelay(100000)`): igual que smp38. **No era IOSleep.**
+- smp40 (balizas en `UIMInitialize`):
+  - arranque 1: **congelación al instante tras el WAKE** (intermitente: smp36, smp37, smp40-1);
+  - arranque 2: **OHCI0 pasa** (Latte mask0 `0xA0`), pero se para más adelante: los dos núcleos IDLE, manzana sin rueda, cursor visible, **sin red** (Redmi por USB-ECM).
+- Resumen: el punto de parada cambia, pero siempre termina en "dos núcleos ociosos esperando algo" o en una congelación temprana.
+
+---
+
+# PARTE 68 — Respuesta: falta la difusión de direcciones (HID0[ABE]) — el otro núcleo no ve tlbie ni operaciones de caché
+
+## 68.1 El hallazgo (pregunta 1)
+NetBSD, en `sys/arch/powerpc/oea/cpu_subr.c:375-390`, dentro de `#ifdef MULTIPROCESSOR`:
+```c
+/* Enable address broadcasting for MP systems */
+...
+} else if (vers == IBMESPRESSO) {
+    spr = mfspr(SPR_IBMESPRESSO_HID4);
+    mtspr(SPR_IBMESPRESSO_HID4, spr | HID4_H4A | HID4_SBE);
+    spr = mfspr(SPR_HID0);
+    mtspr(SPR_HID0, spr | HID0_ABE);          // HID0_ABE = 0x00000008 ("Enable address broadcast")
+    __asm volatile("sync;isync");
+}
+```
+- En la familia 750, **HID0[ABE]** decide si las operaciones de solo dirección se **difunden por el bus**: `dcbf`, `dcbst`, `dcbi`, `icbi`, `tlbie`, `tlbsync`, `sync`/`eieio`. **Sin ABE, cada núcleo las ejecuta solo en su propia caché y su propio TLB.**
+- Tu HID0 del núcleo 0 es **`0x0011C064`** y el `pfHID0` que das al núcleo 1 es `0x00110064`. **Ninguno tiene el bit 0x8.** Así que ahora mismo:
+  - un `tlbie` de un núcleo **no borra** la traducción en el TLB del otro. XNU cambia mapeos continuamente (`pmap_remove`, `IOUnmapPages`/`IOMapPages`, `IOSetProcessorCacheMode`), así que el otro núcleo sigue usando traducciones viejas: lee o escribe en la página física equivocada, o con el WIMG antiguo;
+  - un `dcbi`/`dcbf`/`dcbst` (`invalidate_dcache`, `flush_dcache`, el `sync_cache` de código) **no afecta a la caché del otro núcleo**;
+  - `icbi` no se difunde: el código parcheado o cargado por un núcleo puede quedar viejo en la caché de instrucciones del otro.
+- **Coherencia normal ≠ esto.** CAR/BCR hicieron que las **lecturas y escrituras normales** se vean entre núcleos (la sonda de 43b lo demostró). Pero las **operaciones de gestión de caché y TLB** necesitan además ABE para salir al bus.
+
+## 68.2 Cómo explica los síntomas
+- **E/S que nunca termina con los dos núcleos ociosos (smp38-40):** los drivers de Wiintosh usan DMA **no coherente** con gestión manual de caché:
+  - `WiiOHCI` convierte las páginas de ED/TD/HCCA a no cacheables con `IOSetProcessorCacheMode` (`WiiOHCI_Buffers.cpp:49/143/146`, `WiiOHCI.cpp:222`), que hace `IOUnmapPages` + `IOMapPages` (`IOLib.c:577-607`) → **`tlbie`** en un solo núcleo. **No hay ningún vaciado de caché** en ese cambio (`pmap_enter`, `ppc/pmap.c:1086-1110`).
+  - Además usa `invalidate_dcache` y `flush_dcache` sobre bounce buffers (`WiiOHCI_UIM.cpp:76/423`, `WiiOHCI_Interrupts.cpp:296/360`). SDHC hace lo mismo (`WiiSDHC_Commands.cpp:374/491`).
+  - Si el otro núcleo conserva la traducción **cacheable** vieja o líneas sucias de esas páginas, lee estados de TD/HCCA **viejos** o **pisa** lo que escribió el controlador al desalojar la línea. La transferencia "nunca acaba", el driver espera un evento que no llega y los dos núcleos quedan ociosos. Depende de qué núcleo tocó cada página: por eso el punto de parada cambia (OHCI en UIMInitialize, luego la red…).
+- **Congelaciones instantáneas tras el WAKE (intermitentes):** son compatibles con traducciones o código viejos en el núcleo 0 o el 1. Por ejemplo, los stubs y parches de código que escribes con `ml_phys_write` + `sync_cache64` solo invalidan la caché de instrucciones **del núcleo que los escribe**. Lo mismo con cualquier `tlbie` durante el arranque del núcleo 1.
+- **Parte 45 ("con HID4 de Nintendo muere al traducir"):** `0xB3B00000` incluye **HID4[SBE] = 0x02000000 = "Secondary BAT enable"** (NetBSD `oea/hid.h:197`). Activa los **BAT 4-7**, que XNU no inicializa (contienen basura), y la traducción falla. **No actives SBE** en XNU. NetBSD sí lo hace porque usa esos BAT.
+
+## 68.3 Qué cambiar
+1. **Núcleo 0, en caliente en `WiiPE::start`, antes del WAKE:** con interrupciones apagadas, `mfspr r3,1008; ori r3,r3,0x8; sync; mtspr 1008,r3; sync; isync`. HID0 pasa a ser `0x0011C06C`.
+2. **`pfHID0` del núcleo 0** (per_proc + 0xE0) → `0x0011C06C`. Así se conserva al volver de reposo (`init750nb` recarga HID0 desde `pfHID0`).
+3. **Núcleo 1:**
+   - `pfHID0` del núcleo 1 → **`0x0011006C`** (el valor actual sin ICE/DCE + ABE). `init750nb` lo carga en el HID0 del núcleo 1 y `cacheInit` después enciende ICE/DCE sin tocar ABE.
+   - En el **trampolín**, pon también ABE en el HID0 que escribes, para que esté activo desde el principio.
+4. **HID4:** deja `0x80000000` (H4A) en los dos. **Sin SBE.**
+5. **Verificación:** lee HID0 de los dos núcleos después del arranque (el núcleo 1 lo guarda en lowGlo desde su baliza de `idle_thread` o desde el tick de `_rtclock_intr`). Debe tener el bit 0x8.
+
+**Nota sobre el erratum de lwarx/stwcx.:** el `dcbst` que añades antes de cada `stwcx.` **tampoco se difundía** sin ABE. Es posible que el apaño del erratum no fuera efectivo en SMP hasta ahora **[NO VERIFICADO]**. Con ABE, cada `dcbst` pasa a ser una operación de bus (algo más lenta, pero correcta).
+
+## 68.4 Pregunta 2: capturar qué hilos duermen (si hace falta después de 68.3)
+- Anillo en lowGlo con un gancho en **`_wait_queue_assert_wait64_locked`**. Guarda `(thread, event, LR del llamador)` por entrada; el evento es el argumento que se guarda en `thread+0x14` (lo viste en su `stw r26,0x14(r31)`). Pon un contador circular de 32 entradas.
+- Gancho equivalente en **`_thread_wakeup_prim`** con `(event, cpu)`.
+- Píntalos desde el tick del núcleo 0. Un evento que aparece en el anillo de esperas y **nunca** en el de wakeups es la espera perdida. Resuelve el LR con `nm` para saber quién espera.
+
+## 68.5 Pregunta 3: congelación instantánea sin ticks
+- Si ni el tick de `_rtclock_intr` del núcleo 0 pinta, el núcleo 0 tiene EE=0 permanentemente o está parado. El decrementador ya no sirve: hay que pintar **desde el propio camino**.
+- Usa las **balizas que escriben directamente en el framebuffer** (64.2): VA del FB sin caché parcheada en los stubs. Ponlas en:
+  - núcleo 0: `startCPU` (antes y después del WAKE), `wiiSCRModify` (entrada/lock/mtspr/salida), `handleInterrupt` (entrada/salida), `cpu_signal_handler` y la espera de `SignalReady` en `cpu_start`;
+  - núcleo 1: trampolín, `_start_cpu`, `cacheInit`, `hw_start_trans`, `PE_cpu_machine_init`, `SignalReady`.
+- **Antes de invertir en esto, aplica 68.3.** Es muy posible que las congelaciones instantáneas desaparezcan junto con el resto: `tlbie`/`icbi` no difundidos durante el arranque del núcleo 1 son un buen candidato.
+
+## 68.6 Orden
+1. **68.3: ABE en HID0 de los dos núcleos + `pfHID0` de los dos** (sin SBE). Verificar HID0 en los dos núcleos.
+2. Arrancar 3-4 veces con el diagnóstico actual.
+3. Si aún hay paradas: anillo de esperas/wakeups (68.4) y balizas al FB (68.5).
+4. Si llega al escritorio: prueba de paralelismo (dos bucles `sh`) y después prueba de estrés de E/S (copiar ficheros grandes a la SD, red por USB).
