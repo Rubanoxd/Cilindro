@@ -67,7 +67,8 @@
 > - **Partes 87–88** — con el filtro en WiiSDHC: **0 errores de SD, 23 min estables con 2 núcleos**. Queda: gcc falla a veces sin mensaje y el load sube a ~1. Siguiente: capturar **qué etapa** de gcc falla y con qué señal (88.1), `sample` de WindowServer, **probar de nuevo el arranque SMP desde el principio** (sin arranque tardío) y **medir** frente a UP antes de la dylib de stubs (88.3).
 > - **Partes 89–90** — ningún hilo de usuario corre en el núcleo 1 y aun así el userland se corrompe (salida duplicada, fichero recién creado que desaparece). Encaja con **bits R/C (Changed) de las PTE perdidos** entre núcleos: **NetBSD Espresso MP hace `dcbst` de la PTE tras cada escritura** y XNU no. Parchear las ~12 escrituras de PTE de `hw_vm.s` (+ lectura de R/C) con `dcbf` (90.2).
 > - **Partes 91–92** — con `dcbf` en las PTE: **COW y stdio arreglados** (cowtest 1000/1000). Queda un SIGSEGV en la **primera** ejecución de algunos binarios y al crear ficheros nuevos. Pasos: **core dump + gdb** para ver el PC (92.1), prueba de coherencia de **`dcbz`** entre núcleos (92.2), atar el workloop de SDHC al núcleo 0 como descarte (92.3), y cambiar los 2 `dcbst` restantes a `dcbf`.
-> - Si algo se contradice, vale la parte **más reciente** (92 > 91 > 90 > 89 > 88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 93–94** — los procesos que mueren acaban todos en el `trap` de `__NSRaiseError` (Foundation), incluso `bash`. Encaja con una **página con identidad equivocada** (datos o punteros de otra biblioteca). Faltan por tapar las **revalidaciones de PTE** de `hw_walk_phys`, `hw_protect`, `hw_test_rc` y `hw_test_rc_gv` (94.1). Confirmar con la cadena de llamadas del core y el puntero usado (94.2), y comparar en UP (94.3).
+> - Si algo se contradice, vale la parte **más reciente** (94 > 93 > 92 > 91 > 90 > 89 > 88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -84,14 +85,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 92.5** (core dump del SIGSEGV; prueba de dcbz; descarte de SDHC en el núcleo 1).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 94.5** (dcbf en las 7 revalidaciones de PTE restantes; análisis del core; comparación en UP).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -4778,3 +4779,56 @@ Sin crash log no sabemos si el que muere es el hijo de `bash` antes del `exec`, 
 2. `dcbst` → `dcbf` en los dos sitios (92.4).
 3. Prueba de `dcbz` (92.2) y descarte de SDHC/OHCI en el núcleo 1 (92.3).
 4. Con el fallo entendido y resuelto, **entonces** medidas (88.3) y arranque SMP temprano. Con corrupción de memoria de por medio, las medidas no valen todavía.
+
+
+---
+
+# PARTE 93 — (informe del Mac) Todos los procesos que mueren lo hacen en el mismo `trap` de Foundation
+
+- Los 2 `dcbst` restantes pasan a `dcbf`. Workloops de SDHC y OHCI atados al núcleo 0 → **sigue pasando**. La prueba de `dcbz` no terminó (se agotaron los tiempos de su sincronización).
+- Volcados con 2 núcleos: SIGSEGV en `eaytest`, `enc2xs`, `grolbp`, `hdxml2manxml`, `plutil`, `say`, y `bash` con `malloc: *** Deallocation of a pointer not malloced … double free()`.
+- **Mismo PC en todos: 0x92BFF07C = `trap` dentro de `__NSRaiseError` (Foundation)**, con LR 0x92BFF054. `bash`, `grolbp` y `eaytest` **no enlazan Foundation**.
+- No se pudo comparar aún en UP.
+
+---
+
+# PARTE 94 — Respuesta: faltan PTE por vaciar, y así se confirma una página "de otra biblioteca"
+
+## 94.1 Pregunta 1: sí, quedan escrituras de PTE sin tapar
+En la 90.3 tapaste invalidar, leer R/C e insertar (`hw_rem_map`, `handlePF`, `mapInvPte32`). Pero hay **revalidaciones**: después de `mapInvPte32` (que ahora deja V=0 en memoria), estas rutinas **vuelven a escribir la PTE con V=1** (nueva protección o R/C limpios), y esa escritura se queda **solo en la caché** del núcleo que la hace:
+| Línea `hw_vm.s` | Rutina (etiqueta) | Escritura |
+|---|---|---|
+| 2679 / 2681 | **`hw_walk_phys`** (`hwpSrc32`) | `stw r5,4(r3)` / `stw r4,0(r3)` |
+| 3210 / 3212 | **`hw_protect`** (`hpSF1`…) | `stw r5,4(r3)` / `stw r4,0(r3)` |
+| 3395 | **`hw_test_rc`** (`htrNoClr32`) | `stw r4,0(r3)` |
+| 7214 | **`hw_test_rc_gv`** (`gtdNoClr32`) | `stw r4,0(r3)` |
+
+- `hw_walk_phys` es **muy usada**: recorre todos los mapeos de una página física para **proteger, limpiar ref/mod o desconectar** (`pmap_page_protect`, `mapping_clr_mod`/`clr_ref` y el **pageout**). Suele correr en hilos del kernel, así que en el **núcleo 1**.
+- **Qué pasa sin el vaciado:** el otro núcleo (la búsqueda en la tabla por hardware) ve en memoria la PTE **inválida**, falla y `handlePF` **inserta otra PTE** para la misma dirección en otra ranura (ahora sí vaciada). Resultado: **dos PTE válidas para la misma dirección**, una de ellas vieja. Eso es arquitectónicamente indefinido: puede usar la vieja, con otra página física o la protección antigua.
+- Eso da exactamente **"páginas con la identidad de otra"**: un proceso lee datos (punteros de `__DATA` de la región compartida, tablas de `malloc`) o código de una página que no es la suya.
+- **Arreglo:** los mismos stubs de la 90.3 (`stw …; dcbf 0,rA; sync; b vuelta`) en esas **7 escrituras**. Localízalas por patrón, como hiciste con las otras: tras la llamada a `mapInvPte32`, el par `stw rX,4(r3)` + `stw rY,0(r3)` y el `stw rY,0(r3)` suelto de `hw_test_rc`/`_gv`.
+
+## 94.2 Pregunta 2: qué del core lo confirma
+En el core de `bash` (o de `grolbp`):
+1. **La cadena de llamadas:** `bt` o, a mano, recorre `r1` → `[sp+8]` (LR guardados). Busca **el primer retorno fuera de Foundation**: esa función (de `bash`, libSystem o libncurses) es la que "saltó" a Foundation.
+2. **Cómo saltó:** `x/12i` alrededor de ese retorno. Normalmente será una llamada por **stub** (`bl` a un stub que hace `lwz r12,<puntero>`/`mtctr r12`/`bctr`) o por un puntero a función.
+   - Lee en el core el **valor de ese puntero** (`x/x <dirección del lazy/non-lazy pointer>`).
+   - Compáralo con lo que debería ser: `otool -v -I` y `nm` del binario/biblioteca, o el mismo puntero en un proceso sano en UP.
+   - **Si el puntero apunta a Foundation**, la página `__DATA` (o la de punteros) de ese proceso tiene **contenido de otra página** → traducción o página equivocada (94.1).
+3. **Si el código del llamador no es el del disco** (`x/12i` distinto de `otool -tv` en la misma dirección) → la página de **texto** es la equivocada.
+4. `info mach-regions` en gdb (o `vmmap <pid>` de un proceso vivo en SMP) para ver qué región cubre esa dirección y si es de la región compartida (0x9xxxxxxx).
+- El `malloc: … double free()` de `bash` encaja con lo mismo: los metadatos del heap leídos de una página ajena.
+
+## 94.3 Pregunta 3: sí, compara en UP primero
+- `say` y `plutil` **sí usan Foundation**. Sin entrada, con `alarm 3` y `</dev/null`, es posible que lancen una **NSException legítima** y terminen en `__NSRaiseError` → `trap` **también en UP**. Descártalos si en UP hacen lo mismo.
+- `bash`, `grolbp`, `eaytest`, `enc2xs` y `hdxml2manxml` **no** deberían tocar Foundation. Si en UP no fallan y en SMP sí, con ese mismo PC, la hipótesis de 94.1 queda muy reforzada.
+- Haz la pasada UP **con el mismo mkext** y `WiiSMP` desactivado (o el arranque tardío con un retraso enorme), y guarda la lista de códigos de salida para compararla línea a línea.
+
+## 94.4 Sobre la prueba de `dcbz`
+Que se agotaran los tiempos de la sincronización por turnos sugiere que el **flag de turno** no se ve bien entre los hilos atados. Usa un flag escrito con `stw` + `dcbf` + `sync` y leído en un bucle con `dcbi`/`dcbf` + `lwz` (o con `lwarx`, que siempre va a memoria coherente). Pero esta prueba pasa a segundo plano: 94.1 explica mejor el patrón.
+
+## 94.5 Orden
+1. Stubs `dcbf` en las 7 revalidaciones de PTE (94.1).
+2. Pasada UP de los mismos binarios (94.3). Luego SMP con el parche nuevo.
+3. Si en SMP sigue algún SIGSEGV: análisis del core (94.2): llamador → puntero → valor esperado.
+4. Si todo pasa: repetir cowtest, heredoc/`date`, presión de memoria, y después medidas (88.3) y arranque SMP temprano.
