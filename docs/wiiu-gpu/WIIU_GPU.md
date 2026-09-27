@@ -55,7 +55,8 @@
 > - **Partes 63–64** — congelación temprana intermitente tras el WAKE. El filtro por Busy no puede bloquear. Hay que ver el camino sin depender de hilos: **balizas que pintan directamente en el framebuffer** (64.2). Quitar escrituras de SCR sin lock y el bucle de ack sin límite (64.3).
 > - **Partes 65–66** — sin congelaciones (SCR con lock). Los dos núcleos ociosos; OHCI0 **nunca llegó a `_interruptEventSource->enable()`**: `WiiOHCI::UIMInitialize` está dormido entre `addEventSource` y `enable()` (dos `IOSleep(100)` en medio). Cómo verlo: el `wait_event` del hilo (66.2).
 > - **Partes 67–68** — IOSleep no era. **Causa global probable: falta `HID0[ABE]` (0x8) en los dos núcleos** → `tlbie`, `dcbf`/`dcbi`/`dcbst`/`icbi` y `sync` **no se difunden** al otro núcleo (NetBSD lo activa para MP en Espresso). Eso deja TLB y líneas de caché viejas en el otro núcleo → DMA/E/S que nunca termina y cuelgues aleatorios. **No** actives HID4[SBE] (son BAT 4-7, explica la muerte de la Parte 45).
-> - Si algo se contradice, vale la parte **más reciente** (68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 69–70** — con ABE el núcleo 1 ya ejecuta **procesos de usuario** y el arranque llega a la pantalla gris. La parada ahora cuadra con el **erratum lwarx/stwcx. en userland** (libSystem, CoreGraphics…, sin `dcbst`), que Linux corrige recompilando gcc/glibc. Plan: parchear los binarios de usuario **en arranque UP por SSH** con stubs dentro de su propio `__TEXT` (70.3).
+> - Si algo se contradice, vale la parte **más reciente** (70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -72,14 +73,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 68.6** (HID0[ABE] en los dos núcleos + pfHID0; después volver a probar).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 70.6** (escáner + parcheador de stwcx. de usuario, aplicado en UP por SSH; luego SMP).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -3976,3 +3977,89 @@ NetBSD, en `sys/arch/powerpc/oea/cpu_subr.c:375-390`, dentro de `#ifdef MULTIPRO
 2. Arrancar 3-4 veces con el diagnóstico actual.
 3. Si aún hay paradas: anillo de esperas/wakeups (68.4) y balizas al FB (68.5).
 4. Si llega al escritorio: prueba de paralelismo (dos bucles `sh`) y después prueba de estrés de E/S (copiar ficheros grandes a la SD, red por USB).
+
+
+---
+
+# PARTE 69 — (informe del Mac) smp41 con HID0[ABE]: llega más lejos, pero se para
+
+- Cambios: núcleo 0 `HID0 |= 0x8` antes del WAKE (pfHID0 = `0x0011C06C`); núcleo 1 pfHID0 = `0x0011006C` y trampolín con HID0 = `0x0011002C`.
+- Arranque 1: **congelación instantánea tras el WAKE** (ABE no la evita).
+- Arranque 2: **el más lejano**.
+  - Desaparece la manzana; **pantalla gris con icono de espera y cursor**. Sin SSH tras más de 5 minutos.
+  - PI y Latte normales, OHCI0 habilitado. Los dos núcleos IDLE, con muchas más interrupciones.
+  - **El núcleo 1 ya pasa por `cause_ast_check` y por `trap`** (fallos de página): ya ejecuta **procesos de usuario**.
+
+---
+
+# PARTE 70 — Respuesta: ahora toca el erratum en userland
+
+## 70.1 Por qué ahora (pregunta 1)
+- Hasta smp40 el núcleo 1 casi no ejecutaba nada de usuario. Con ABE, el sistema llega a la fase de **WindowServer/loginwindow/launchd/sshd**, y el planificador reparte **hilos de usuario** en los dos núcleos (la baliza `trap` del núcleo 1 lo confirma: fallos de página de usuario).
+- El erratum de Espresso **también afecta a userland**. El repositorio `smp-patches` de linux-wiiu (README): *"there was an errata affecting the load-exclusive and store-exclusive instructions … a cache flush needs to be inserted before each stwcx instruction – on Linux, this means patching compilers, libraries, the kernel, etc."*. Su `glibc-2.38-espresso.patch` añade `dcbst 0,rA` justo antes de **cada** `stwcx.` de glibc, y el de gcc hace lo mismo con los atómicos que genera el compilador.
+- En Tiger, la commpage MP ya está parcheada. Pero quedan los `stwcx.` **dentro de los propios binarios** (el escáner de hace tiempo encontró libSystem 5, CoreGraphics 20, CoreAudio 44…). Con dos núcleos, un `stwcx.` sin `dcbst` puede "tener éxito" sin que el otro núcleo lo vea. Eso corrompe spinlocks, contadores de referencias y colas de libSystem/CoreGraphics, así que un proceso (WindowServer, loginwindow, launchd, sshd) se queda esperando para siempre.
+- Encaja: **pantalla gris con icono de espera** (loginwindow/WindowServer bloqueados), cursor vivo (lo mueve el kernel/IOHID), **sin SSH** (sshd o launchd bloqueados), y **los dos núcleos ociosos**, porque los hilos de usuario duermen en el kernel esperando a otros hilos.
+- En UP el erratum no se nota (solo hay un núcleo compitiendo), así que **parchear userland en un arranque UP es seguro**: el `dcbst` añadido no cambia nada con un solo núcleo.
+
+## 70.2 El anillo de esperas (68.4)
+- Sirve, pero con procesos de usuario verás esperas en `semaphore_wait`/`psynch`/`mach_msg` que no dicen qué lock de usuario se corrompió. **Prioriza 70.3.** Monta el anillo solo si después del parche sigue parándose.
+- Si lo montas, guarda en `_wait_queue_assert_wait64_locked`: `thread`, `event` (r4/r5 del argumento; es lo que acaba en `thread+0x14`), el **LR** y `current_task()` o, más barato, el **SRR0 de usuario** de `thread->machine.upcb` (`save_srr0` en +0x184), que dice en qué biblioteca estaba el proceso al entrar al kernel. En `_thread_wakeup_prim` guarda `event` y `cpu`.
+
+## 70.3 Cómo parchear los binarios de usuario (sin recompilar)
+**Técnica: stub por sitio dentro del mismo `__TEXT`** (sin tocar registros ni LR):
+- En cada sitio con `lwarx rD,rA,rB` … `stwcx. rS,rA,rB` (mismo rA,rB a ≤ 16 instrucciones: tu filtro actual), sustituye el `stwcx.` por **`b stub_k`** (salto relativo, ±32 MB, sin enlace).
+- `stub_k` (12 bytes):
+  ```
+  dcbst  rA,rB
+  stwcx. rS,rA,rB
+  b      sitio+4        ; vuelve al bne- con cr0 intacto
+  ```
+- Los stubs van en el **relleno al final del segmento `__TEXT`**: entre el final de la última sección de `__TEXT` y `fileoff + filesize` del segmento. Suele haber cientos de bytes o varios KB hasta el límite de página. Ese relleno se mapea con el segmento (r-x) y no pertenece a ninguna sección.
+- Si en algún binario no cabe, busca otro hueco dentro de `__TEXT` (por ejemplo, el final de `__TEXT,__text` si está alineado con relleno). Si tampoco, **anótalo y sáltalo**.
+- **Mach-O 32-bit PPC, big-endian.** Para binarios "fat" (ppc + i386), parchea solo el slice ppc.
+- Tiger no firma código. El prebinding guarda direcciones, no sumas de los bytes de `__TEXT`, así que no hace falta regenerar nada. Si `update_prebinding` se queja en el siguiente arranque, es inocuo.
+
+**Qué escanear** (en el disco de Tiger, arranque **UP**, por SSH):
+- `/usr/lib/*.dylib` (**libSystem.B.dylib primero**), `/usr/lib/system/*`;
+- `/System/Library/Frameworks/*.framework/Versions/*/**` y `/System/Library/PrivateFrameworks/**` (binarios Mach-O);
+- `/System/Library/CoreServices/**` (WindowServer, loginwindow, SystemUIServer, Finder, Dock…), `/usr/sbin/*`, `/usr/bin/*`, `/sbin/*`, `/bin/*`, `/usr/libexec/*`;
+- apps que arranquen solas (login items).
+
+**Herramienta** (Python o C en el Mac o en la propia Wii U):
+1. Parsear Mach-O: `LC_SEGMENT` `__TEXT` → secciones; decodificar instrucciones de 32 bits.
+   - `stwcx.` = `(ins & 0xFC0007FF) == 0x7C00012D`.
+   - `lwarx` = `(ins & 0xFC0007FE) == 0x7C000028`.
+2. Para cada `stwcx.` con su `lwarx` (mismo rA,rB) antes, a ≤ 16 instrucciones: generar el stub en el relleno y el `b`.
+   - Codificación de `b`: `0x48000000 | (desplazamiento & 0x03FFFFFC)`.
+   - `dcbst rA,rB` = `0x7C00006C | (rA<<16) | (rB<<11)`.
+3. **Copia de seguridad** de cada fichero (`.orig`) y un **registro** (fichero, offset, instrucción original).
+4. Guardar un `.sh` de **deshacer** que restaure los `.orig`.
+5. Tras parchear: `otool -tv` de 2 o 3 sitios para comprobar el stub; ejecutar programas sencillos en UP (`ls`, `sh`, abrir una app) para verificar que siguen funcionando.
+- Recuerda los falsos positivos (`stwcx.` para anular reservas sin `lwarx` cerca): **no** los toques.
+
+## 70.4 Congelación instantánea tras el WAKE (pregunta 2)
+- ABE no la ha quitado, así que es otra cosa y hay que **verla**: balizas que pintan **directamente al framebuffer** (68.5/64.2). No dependen del tick ni de ningún hilo.
+- Pon la VA del FB (sin caché) en los stubs y pinta bloques en:
+  - núcleo 0: `startCPU` (antes/después del WAKE), `wiiSCRModify` (entrada/lock/mtspr/salida y la rama "escribir sin lock tras 50M intentos"), `handleInterrupt` (entrada/salida), `cpu_signal_handler`, `cpu_start` (antes de `thread_sleep`);
+  - núcleo 1: trampolín, `_start_cpu`, `cacheInit` (entrada/salida), `hw_setup_trans`, `hw_start_trans`, `PE_cpu_machine_init`.
+- **Sospechoso concreto a vigilar:** la rama de `wiiSCRModify` que escribe **sin lock** tras agotar los intentos. Con EE=0 y 50M intentos, eso son **segundos con el núcleo 0 parado**. Si el lock lo tiene el núcleo 1 en ese momento (o nunca se libera), el núcleo 0 "se congela" varios segundos y después escribe un SCR viejo (64.3). Pinta un bloque distinto en esa rama.
+- Congelación **sin ticks** también puede ser el **núcleo 0 con EE=0 dentro de esa espera**. Reduce los intentos a algo del orden de milisegundos (usa el TB como límite, p. ej. 1 ms) y cuenta cuántas veces se agota.
+
+## 70.5 Pregunta 3: ¿falta algo de NetBSD/Linux para MP?
+Comparando con NetBSD (`evbppc/nintendo/machdep.c:418-425`, `cpu.c` y `oea/cpu_subr.c:375-390, 823-835`):
+| NetBSD | Tú | ¿Hace falta? |
+|---|---|---|
+| Núcleo 0: `SCR` (bit 31 on, bit 30 off), `CAR \|= 0xFC100000`, `BCR = 0x08000000` | igual | ✓ |
+| `HID5 \|= H5A \| PIRE` (núcleo 0) | igual (`0xC0000000`) | ✓ |
+| MP: `HID0 \|= ABE` | **ya** | ✓ |
+| MP: `HID4 \|= H4A \| SBE` | H4A sí; **SBE no** | No: SBE = BAT 4-7, NetBSD los usa y XNU no (Parte 68.2) |
+| `cpu_setup`: HID2 = 0, HID4 completo, `HID5 \|= 0x67fdc000`, L2 activada | HID4/HID5 copiados del núcleo 0 | No por ahora: con los valores de Nintendo el núcleo 1 moría por SBE. Probar más tarde `HID5 \|= 0x67fdc000` sin SBE si hay algo raro de L2 |
+| Timebase: sincronización al arrancar | TB compartido: no hace falta | ✓ |
+| Idle: **DOZE** | doze anulado (bucle activo) | Reactivar cuando todo funcione y comprobar que la ICI despierta de doze |
+| userland: gcc/glibc con `dcbst` antes de `stwcx.` | **no** | **Sí → 70.3** |
+
+## 70.6 Orden
+1. **Arranque UP** (WiiSMP=false) → por SSH: escáner + parcheador (70.3), empezando por `libSystem.B.dylib`, luego frameworks gráficos (CoreGraphics, CoreFoundation, Carbon/AppKit…), CoreServices y `/usr/sbin`, `/usr/bin`. Verificar que UP sigue funcionando.
+2. Reducir la espera de `wiiSCRModify` a ~1 ms por TB y añadir las balizas al FB del camino del WAKE (70.4).
+3. Arrancar en SMP 3-4 veces. Si llega al escritorio: dos bucles `sh` en paralelo (~14 s), abrir apps y estrés de E/S (SD y red).
+4. Si sigue parándose en la pantalla gris: anillo de esperas con el SRR0 de usuario (70.2) para ver qué proceso y qué biblioteca.
