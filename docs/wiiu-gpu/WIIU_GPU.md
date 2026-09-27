@@ -43,7 +43,8 @@
 > - **Partes 41–42** — el núcleo 1 entra en XNU pero se cuelga en `cpu_sync_timebase`: **handshake por memoria sin coherencia**; valores HID de Nintendo en el trampolín, sonda de coherencia barata, orden 42.6.
 > - **Parte 43** — rutina de Nintendo 0x240–0x330 confirmada: HID por núcleo = los de 42.6; no hay init de L2 en ese tramo.
 > - **Partes 43b–44** — la coherencia la activan **CAR/BCR**; el núcleo 1 corrompe o se atasca porque `init750nb` le enciende la L1 **sin invalidar** y `cacheInit` escribe esa basura a memoria. Solución: `pfHID0` y `pfl2cr` del núcleo 1 parcheados (44.3).
-> - Si algo se contradice, vale la parte **más reciente** (44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 45–46** — el núcleo 1 ya arranca; las interrupciones externas se congelan. Causa principal: **read-modify-write de las máscaras de Latte/PI sin spinlock** (carrera SMP → vector enmascarado para siempre). Ack del IPI en bucle como NetBSD.
+> - Si algo se contradice, vale la parte **más reciente** (46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -60,14 +61,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 44.5** (parchear pfHID0/pfl2cr del per_proc del núcleo 1 → reintentar).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 46.6** (diagnóstico por per_proc + spinlock en las máscaras de Latte/PI).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -3027,3 +3028,95 @@ Primero sin parchear código:
    - Los stubs no deben usar la pila (r0/r2/r3 ya salvados en SPRG o en registros libres de ese punto).
 4. Cuando llegue a `initCPU`, recuerda que `cpu_sync_timebase` ya tiene coherencia gracias a CAR/BCR (43b).
 5. Después: activar la L2 de 2 MB del núcleo 1 en caliente (invalidar, `L2SIZ` correcto, L2E).
+
+
+---
+
+# PARTE 45 — (informe del Mac) El núcleo 1 arranca en XNU; las interrupciones externas se congelan
+
+- `startCPU` recibe el per_proc **virtual** del núcleo 1. `_PerProcTable` está en 0x365000 (entradas de 16 B). `pfHID0` está en +0xE0 y `pfl2cr`/`pfl2crOriginal` en +0x110. En el maestro `pfl2cr` vale 0, porque `init750` no reconoce el L2SIZ de Espresso. Se parchean en el núcleo 1.
+- **El timebase es compartido entre núcleos.** Las escrituras de TB en `__start_cpu` y `cpu_sync_timebase` se han cambiado por nop.
+- Balizas en lowGlo 0x5F00: el núcleo 1 moría al activar la traducción. Faltaban 7 stwcx. en `__VECTORS` (ya parcheados). Con los HID de Nintendo moría; con HID4/HID5 copiados del 0 (y HID2 sin tocar) pasa.
+- **smp21**: `processor_start(1)` devuelve KERN_SUCCESS. Los contadores de interrupciones externas se congelan (núcleo 0 ≈ 32–63, núcleo 1 ≈ 8–15). La rueda sigue girando, pero no pasa de la manzana y no hay red.
+- IPI: `signalCPU` hace `SCR |= 1<<(20-n)` con IOSimpleLock y EE=0. La recepción en 0x1700 hace `handleInterrupt(source=cpu)`: borra el bit (con lock) y llama a `ipi_handler`; en el source 0 llama también a super (PI). INTMSK(1)=0.
+
+---
+
+# PARTE 46 — Respuesta: la causa más probable son las máscaras de Latte/PI, no el núcleo 0
+
+## 46.1 El núcleo 0 probablemente **no** está colgado
+- La rueda (`vc_progress`) la mueve un callout de reloj que puede correr en cualquier núcleo, y el contador del núcleo 0 solo cuenta **externas**. Que se congele no demuestra EE=0: también encaja con que **las fuentes de Latte/PI se quedaron enmascaradas**.
+- En ese caso el disco (SD/USB), la red y el resto dejan de interrumpir. Los hilos de IOKit esperan E/S para siempre, el arranque no avanza y no hay panic. Los dos núcleos siguen vivos, en reposo (doze) y despertados por el decrementador.
+- Además, si todo espera E/S casi no hay ASTs, y por eso también se congela el contador de IPIs del núcleo 1.
+- Si el núcleo 0 estuviera girando con EE=0 dentro de un `hw_lock_lock`, lo normal sería un panic "simple lock deadlock/timeout", y no lo hay.
+
+## 46.2 El fallo: read-modify-write de la máscara sin spinlock (osx-drivers)
+`LatteInterruptController.cpp` y `WiiInterruptController.cpp` (PI/Cafe):
+- `disableVectorHard()`: `mask = readReg32(Mask0); mask &= ~bit; writeReg32(Mask0, mask);`
+- `enableVector()`: igual, con `|=`.
+- `handleInterrupt()` llama a `disableVectorHard()` desde el núcleo 0 (vector con `interruptDisabledSoft`).
+- `IOInterruptController::enableInterrupt()` (xnu `IOInterruptController.cpp:270`) llama a `enableVector()` **desde el hilo que lo pida**, por ejemplo el workloop de un `IOInterruptEventSource`. Ese hilo ahora puede estar en el **núcleo 1**.
+
+Con un solo núcleo esto era seguro, porque el manejador corre con EE=0 y nadie más toca el registro. Con dos núcleos:
+```
+núcleo 0 (handler, vector A)      núcleo 1 (workloop, vector B)
+m = Mask0   (A=1,B=0)
+                                  m' = Mask0  (A=1,B=0)
+Mask0 = m & ~A  (A=0,B=0)
+                                  Mask0 = m' | B   (A=1,B=1)  ← A reactivado sin querer
+```
+o, al revés, **B se pierde**: B queda enmascarado para siempre porque `interruptDisabledHard` ya es 0 y nadie volverá a llamar a `enableVector(B)`.
+- `IOInterruptEventSource` hace disable/enable **en cada interrupción** (normalInterruptOccurred → `disableInterrupt`; `checkForWork` → `enableInterrupt`). Así que la carrera es muy frecuente en cuanto el planificador lleva workloops al núcleo 1. Encaja con que el congelamiento llegue poco después de `processor_start`.
+- Los controladores de Apple con MP (OpenPIC/MPIC) tienen **un registro por fuente**, sin RMW; por eso IOKit no lo protege. Hollywood/Latte/PI tienen una sola palabra de máscara compartida.
+
+**Arreglo** (en los dos controladores, y también en Hollywood por coherencia):
+1. Añadir un `IOSimpleLock *maskLock` (spin, no `IOLock`).
+2. Mantener una **máscara sombra** en memoria (`shadowMask0/1`) y no leer el hardware para hacer el RMW.
+3. En `enableVector`, `disableVectorHard` y cualquier escritura de máscara:
+   ```cpp
+   IOInterruptState st = IOSimpleLockLockDisableInterrupt(maskLock);
+   shadowMask0 |= bit;            // o &= ~bit
+   writeReg32(kWiiLatteIntRegPPCInterruptMask0, shadowMask0);
+   eieio();
+   IOSimpleLockUnlockEnableInterrupt(maskLock, st);
+   ```
+   `IOSimpleLockLockDisableInterrupt` es válido tanto desde el manejador (EE ya a 0) como desde un hilo.
+4. En `handleInterrupt`, usar `shadowMask` en vez de leer la máscara (o leerla bajo el lock).
+5. El lock usa `hw_lock_lock` (lwarx/stwcx. del kernel ya parcheados con dcbst).
+
+## 46.3 Diagnóstico barato antes del arreglo (pregunta 2)
+No hay forma de leer el PC de otro núcleo en Espresso (no hay registro de depuración cruzado accesible). En su lugar:
+1. **Contadores de XNU por CPU:** cada `per_proc` tiene `hwCtr` (contadores de excepciones por tipo, incluidos los decrementadores).
+   - Desde el núcleo que dibuja las balizas, vuelca el per_proc del núcleo 0 (y del 1) **dos veces con 1 s de diferencia** y compara.
+   - La palabra que sube unos 100/s (HZ) es el contador de decrementadores. Si sube en el núcleo 0 → el núcleo 0 **vive con EE=1**.
+2. **Estado de las máscaras en el momento del congelamiento:** lee y pinta `Latte PPC0 Cause0/1` y `Mask0/1`, y `PI INTSR(0)`/`INTMSK(0)`.
+   - Si `cause & ~mask` ≠ 0 en un bit que debería estar habilitado (el vector tiene handler registrado y no está soft-disabled), **46.2 queda confirmado**.
+   - Compáralo con `vectors[i].interruptDisabledSoft/Hard`.
+3. Si el paso 1 dice que el núcleo 0 **no** avanza, entonces sí está girando con EE=0. En ese caso añade balizas en `hw_lock_lock`/`hw_lock_mbits` (dirección del lock en SPRG o en lowGlo).
+
+## 46.4 IPI: ack como NetBSD y otros detalles (pregunta 1b)
+- NetBSD (`evbppc/nintendo/pic_pi.c`, `pi_ipi_ack`) **repite** el borrado hasta que el bit lee 0:
+  ```c
+  do { mtspr(SCR, spr & ~IPI_PEND(cpu)); spr = mfspr(SCR); } while (spr & IPI_PEND(cpu));
+  ```
+  Haz lo mismo (bajo tu lock). Una sola `mtspr` puede no bastar si el otro núcleo escribe SCR a la vez.
+- NetBSD procesa **primero** el IPI (SCR) y después la PI en la misma entrada. Los IPIs son su IRQ 20+n ("MB_CPU(n)") con afinidad por núcleo.
+- NetBSD **no** usa lock para enviar (`mtspr(SCR, mfspr(SCR)|mask)`), pero tu lock no hace daño si todos los RMW de SCR (WAKE incluido) lo usan.
+- Protocolo de XNU (`cpu.c`): `cpu_signal` es **asíncrono** (0,5 ms de timeout para coger `MPsigpStat` y vuelve). Si un IPI se pierde, el `MPsigpStat` del destino se queda en "mensaje pendiente". Los siguientes SIGPast/SIGPwake se **fusionan** y devuelven éxito sin mandar nada, así que ese núcleo ya no recibe más IPIs y el contador se congela sin cuelgue.
+  - Comprobación: lee `MPsigpStat` del per_proc del núcleo 1 cuando se congele. Si tiene `MPsigpMsgp`, hay un IPI perdido.
+  - Consumidores síncronos que esperan a otro núcleo: solo `cpu_sync_timebase` (ya pasado), `cpu_broadcast` (solo `pms.c`, no se usa en el 750) y SIGPdebug (debugger). Ninguno encaja con un cuelgue a mitad de arranque.
+- (c) `pfSMPcap`/`tlbsync`: XNU no espera nada por ello. Sin `pfSMPcap` simplemente no emite `tlbsync`. La difusión de `tlbie` entre núcleos es un riesgo aparte **[NO VERIFICADO]**: provocaría corrupción, no un congelamiento limpio.
+- Reposo: `WiiCPU` registra `supports_nap = false`, así que XNU hace **doze** (el 750 tiene `pfCanDoze`). NetBSD también elige DOZE para Espresso (`cpu_subr.c`), no NAP. Correcto; **no actives nap** (en nap el 750 no hace snoop).
+
+## 46.5 stwcx. restantes (pregunta 3)
+- **Commpage UP:** con `ml_get_max_cpus() > 1`, `commpage_populate` copia solo las variantes MP. Las UP **no llegan a la commpage**, así que no hace falta parchearlas.
+  - Compruébalo: en `_cpu_capabilities` (commpage 0xFFFF8010) el bit `kUP` (0x8000) debe estar a 0.
+- **Kexts:** ya se comprobó que en el mkext solo tiene stwcx. ATIRadeon9700, que no se carga. Pero **kextd carga más kexts después** desde `/System/Library/Extensions`. Pasa el escáner (lwarx con el mismo rA,rB a ≤16 instrucciones) por **todos los binarios que aparezcan en `kextstat`** tras un arranque UP completo. Los kexts normales usan `OSAddAtomic`/`IOSimpleLock` del kernel, que ya están parcheados.
+- **Userland** (libSystem 5, CoreGraphics 20, CoreAudio 44…): no causa un congelamiento del kernel, pero **sí** puede corromper locks de procesos en cuanto corran hilos en los dos núcleos. Déjalo para después de arrancar. Opción rápida: parchear en disco (con copia) solo `libSystem.B.dylib` primero.
+
+## 46.6 Orden recomendado
+1. **Diagnóstico** 46.3 pasos 1 y 2 (sin cambiar lógica): ¿el núcleo 0 vive?, ¿`cause & ~mask` ≠ 0?, ¿`MPsigpStat` del núcleo 1 con Msgp?
+2. **Arreglo 46.2** (maskLock + máscara sombra) en Latte, PI/Cafe y Hollywood. Este cambio es bueno también para upstream.
+3. **Ack del IPI en bucle** (46.4).
+4. Reintentar el arranque SMP. Si pasa de la manzana, escanear los kexts de `kextstat` (46.5) y después libSystem.
+5. Opcional: escribe los valores de HID del núcleo 1 idénticos al 0 (lo que funciona). Los de Nintendo quedan aparcados. HID2 `0x000F0000` activa excepciones de error de DMA/locked cache (DCHEE/DNCEE/DCMEE/DQOEE en Gekko) **[NO VERIFICADO en Espresso]**, lo que podría explicar que muriera al traducir.
