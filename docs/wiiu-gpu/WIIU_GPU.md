@@ -44,7 +44,8 @@
 > - **Parte 43** — rutina de Nintendo 0x240–0x330 confirmada: HID por núcleo = los de 42.6; no hay init de L2 en ese tramo.
 > - **Partes 43b–44** — la coherencia la activan **CAR/BCR**; el núcleo 1 corrompe o se atasca porque `init750nb` le enciende la L1 **sin invalidar** y `cacheInit` escribe esa basura a memoria. Solución: `pfHID0` y `pfl2cr` del núcleo 1 parcheados (44.3).
 > - **Partes 45–46** — el núcleo 1 ya arranca; las interrupciones externas se congelan. Causa principal: **read-modify-write de las máscaras de Latte/PI sin spinlock** (carrera SMP → vector enmascarado para siempre). Ack del IPI en bucle como NetBSD.
-> - Si algo se contradice, vale la parte **más reciente** (46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 47–48** — vectores de Latte soft-disabled porque su workloop quedó asignado al **núcleo 1 en reposo (doze)** y el IPI SIGPwake no lo despierta; prueba: quitar el doze (48.3).
+> - Si algo se contradice, vale la parte **más reciente** (48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -61,14 +62,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 46.6** (diagnóstico por per_proc + spinlock en las máscaras de Latte/PI).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 48.5** (revertir smp24; contadores por per_proc; arranque sin doze).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -3120,3 +3121,69 @@ No hay forma de leer el PC de otro núcleo en Espresso (no hay registro de depur
 3. **Ack del IPI en bucle** (46.4).
 4. Reintentar el arranque SMP. Si pasa de la manzana, escanear los kexts de `kextstat` (46.5) y después libSystem.
 5. Opcional: escribe los valores de HID del núcleo 1 idénticos al 0 (lo que funciona). Los de Nintendo quedan aparcados. HID2 `0x000F0000` activa excepciones de error de DMA/locked cache (DCHEE/DNCEE/DCMEE/DQOEE en Gekko) **[NO VERIFICADO en Espresso]**, lo que podría explicar que muriera al traducir.
+
+
+---
+
+# PARTE 47 — (informe del Mac) Vectores de Latte pendientes y enmascarados
+
+- Nueva herramienta: capturadora Elgato HD60 S+ con OBS; `screencapture -l <id>` de la ventana del proyector.
+- smp23 (maskLock + sombra + ack del IPI en bucle): el hilo de diagnóstico **corre en el núcleo 0** y su latido avanza, así que el núcleo 0 vive.
+  - PI: cause `0x00010000` (bit 16 siempre activo), mask `0x01000010`.
+  - **Latte: cause0 `0x01010000` (vectores 16 y 24), mask0 `0x00000080` (solo el 7)**. Dos dispositivos piden interrupción y están enmascarados.
+  - Interrupciones externas: núcleo 0 ≈ 4–7, núcleo 1 ≈ 2–3.
+- smp24 (volver a habilitar dentro de `handleInterrupt` si ya no está soft-disabled): todas las máscaras a 0, el latido se para y la rueda desaparece. **Peor.**
+
+---
+
+# PARTE 48 — Respuesta: el workloop se queda en el `next_thread` de un núcleo 1 dormido
+
+## 48.1 Por qué quedan soft-disabled (pregunta 1)
+Cadena en xnu-792:
+1. Llega la interrupción del SDHC (Latte 16/24) al núcleo 0. `IOInterruptEventSource::disableInterruptOccurred` hace `prov->disableInterrupt()` (soft) y `signalWorkAvailable()`.
+2. En la siguiente interrupción de esa fuente, el manejador ve `interruptDisabledSoft` y la enmascara (`Hard`). Esto es correcto y esperado.
+3. `signalWorkAvailable` despierta el hilo del workloop. En `thread_setrun` (`kern/sched_prim.c:1985-2030`):
+   - Si el `last_processor` del hilo está **IDLE**, o si hay **cualquier procesador en `idle_queue`**, pone `processor->next_thread = hilo`, `state = PROCESSOR_DISPATCHING`.
+   - Después llama a `machine_signal_idle(processor)`, que manda un **IPI `SIGPwake`** (solo si `pfCanDoze|pfWillNap`).
+   - El núcleo 0 está ocupado en la interrupción, así que el elegido es casi siempre el **núcleo 1 en reposo**.
+4. Si el núcleo 1 no sale del reposo, el hilo se queda en `processor[1]->next_thread` **para siempre**. Nadie más lo coge, porque ya no está en ninguna cola. Así, `checkForWork` → `enableInterrupt` nunca ocurre y los vectores quedan soft-disabled y enmascarados.
+   - Es exactamente lo que ves: el núcleo 0 vive y los hilos que ya estaban en su cola siguen corriendo (el latido), pero cada workloop que pasa por el núcleo 1 se pierde.
+
+Por qué el núcleo 1 no despierta:
+- `machine_idle` pone **doze** (HID0 DOZE + MSR[POW]), porque el 750 tiene `pfCanDoze` y `supports_nap=false`.
+- Un núcleo en doze sale con: interrupción externa, **decrementador**, SMI o machine check. Que la **ICI de Espresso (0x1700)** despierte de doze está **[NO VERIFICADO]**. En el 750, 0x1700 es la interrupción térmica.
+- En XNU un núcleo ocioso sin temporizadores pendientes pone el decrementador **muy lejos** (etimer, no hay tick periódico). Así que depende del IPI.
+- NetBSD también usa doze en Espresso, pero tiene un **tick periódico (HZ)**: el decrementador despierta al núcleo cada 10 ms y esconde el problema.
+- Otra posibilidad: el IPI sí llega, pero `MPsigpStat` del núcleo 1 quedó con un mensaje pendiente (46.4) y los SIGPwake se fusionan sin enviarse.
+
+## 48.2 Por qué smp24 lo empeora (pregunta 2)
+- El protocolo de IOKit (`IOInterruptController.cpp:270-331`: Soft / Hard / `interruptActive` / `while (interruptActive)`) **ya es correcto en SMP**. No hace falta tocarlo; lo único que necesitaba lock era el RMW de la máscara (46.2, ya hecho).
+- Rehabilitar la fuente **dentro del manejador**, cuando es de nivel y sigue pendiente (el driver aún no ha servido el dispositivo, porque su workloop no ha corrido), hace que vuelva a dispararse nada más salir.
+  - El resultado es una **tormenta** en el núcleo 0 con el mismo vector (disable → enable → disable…), que come todo el tiempo de CPU. Por eso se para el latido.
+  - En el cruce con el camino normal de otro núcleo, la sombra acaba a 0.
+  - La cascada PI 24 cae por el mismo camino: el Latte se registra como "dispositivo" del PI.
+- **Revierte smp24 por completo.**
+
+## 48.3 Prueba barata de si el núcleo 1 ejecuta (pregunta 3)
+Sin código en el núcleo 1:
+1. Desde tu hilo de diagnóstico (núcleo 0) lee cada segundo el `per_proc` del núcleo 1 (dirección virtual de `PerProcTable[1]`):
+   - `hwCtr.hwDecrementers` y `hwCtr.hwExternals` (en `struct hwCtrs` el orden es: hwInVains, hwResets, hwMachineChecks, hwDSIs, hwISIs, **hwExternals**, hwAlignments, hwPrograms, hwFloatPointUnavailable, **hwDecrementers**…). Busca el offset de `hwCtr` volcando el per_proc del núcleo 0 dos veces: la palabra que sube como tu contador de externas es hwExternals, y 4 palabras después va hwDecrementers.
+   - `MPsigpStat`: si `MPsigpMsgp` está activo y no cambia → IPI perdido o no consumido.
+   - `processor[1]->state` / `next_thread`: están en la `struct processor`; más fácil, pinta `pp->...->active_thread`. Si ves `next_thread != 0` con el estado DISPATCHING durante segundos → confirmado.
+2. Con eso sabes: si hwDecrementers[1] no sube, el núcleo 1 duerme y no despierta. Si hwExternals[1] no sube tras nuevos SIGPwake, el IPI no le llega o no lo despierta de doze.
+
+## 48.4 Prueba decisiva: quitar el doze
+- `machine_idle` (`machine_routines_asm.s:~830`) hace `bt pfCanDozeb,yesnap` leyendo **SPRG2** (las features vivas). El per_proc se reescribe en `allstart` (`stw r17,pfAvailable` + `mtsprg 2`), así que **parchear el per_proc antes del WAKE no sirve**.
+- Parchea esa instrucción `bt pfCanDozeb,yesnap` (bit CR 6) por un **`nop`** en `WiiPE::start`. Así ningún núcleo entra en doze: `machine_idle` va a `nonap`, reactiva EE y vuelve, y el bucle ocioso **vuelve a mirar `next_thread` continuamente**.
+  - Búscala en `otool -tv` de `_machine_idle`: tras `lis r4,hi16(dozem)` (`lis r4,0x80`).
+  - Coste: los núcleos ociosos giran en vez de dormir (más consumo y calor en la Wii U; vigila la temperatura, sin tocar THRM).
+- Si con esto **arranca**, el problema es "la ICI no despierta de doze" (o IPIs perdidos). Soluciones definitivas, por orden:
+  1. Quedarse sin doze en el núcleo 1 (y mantener doze en el 0, que despierta con la PI). Hace falta un parche que mire el número de CPU: stub en `__HIB` que compruebe `PP_CPU_NUMBER` en SPRG0.
+  2. Un tick periódico en los secundarios (decrementador acotado, p. ej. 10 ms) como NetBSD.
+  3. Averiguar si algún bit de HID/SCR hace que la ICI despierte de doze **[NO VERIFICADO]**.
+
+## 48.5 Orden
+1. Revertir smp24. Mantener maskLock + sombra + ack en bucle.
+2. Añadir al diagnóstico: hwDecrementers/hwExternals de los dos núcleos, `MPsigpStat` del núcleo 1 y `next_thread`/estado del procesador 1.
+3. Arranque con `bt pfCanDozeb` → nop (48.4).
+4. Según el resultado, elegir la solución de 48.4 y seguir con 46.5 (kexts de kextstat, luego userland).
