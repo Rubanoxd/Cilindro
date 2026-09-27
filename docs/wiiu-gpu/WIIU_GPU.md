@@ -59,7 +59,8 @@
 > - **Partes 71–72** — el parche de userland solo cabe en el 5% de los sitios. Plan: **atar los hilos de usuario al núcleo 0** con un gancho en `thread_setrun` (72.1) y dejar el SMP para los hilos del kernel; los stubs completos, más adelante. Hilo de OHCI dormido en 0x00F98F44: **sacar su pila completa** desde su savearea (72.2).
 > - **Partes 73–74** — pila del hilo de OHCI: `wireVirtual` → `vm_map_create_upl` → espera el **mutex de un vm_object** (evento = mutex + 8 → **lck_mtx en 0x0038F27C**, muy probablemente `kernel_object`). Cómo leer dueño/WAIT y la pila del dueño (74.1). Los parches UP de barreras **no** se aplican con 2 CPU, pero verifícalo (74.2).
 > - **Partes 75–76** — el mutex que espera OHCI (0x02AEE9E0) marca como dueño a un hilo que ya no lo tiene, con WAIT y 8 esperando. La firma encaja con un **`stwcx.` que "acierta" sin deber** en el unlock rápido: el erratum sigue vivo entre núcleos aunque haya dcbst+ABE. **Prueba decisiva: tortura de atómicos con dos hilos atados a cada núcleo** (76.3) y registro del historial de ese mutex (76.4).
-> - Si algo se contradice, vale la parte **más reciente** (76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 77–78** — **el apaño correcto del erratum es `dcbf` antes de `stwcx.`** (`dcbst` pierde incrementos; `dcbst;sync` pierde muchísimos). Aplicado en todo. Sigue la manzana con los dos núcleos ociosos: toca un **recorrido de todos los hilos** (estado, evento, pila) para ver quién espera a quién (78.2).
+> - Si algo se contradice, vale la parte **más reciente** (78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -76,14 +77,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 76.6** (tortura de atómicos por núcleo; historial del mutex 0x02AEE9E0; identificar al dueño).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 78.5** (recorrido de hilos + ventanas lwarx…stwcx. con sync + ritmo de IPI).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -4275,3 +4276,68 @@ Cómo se liberan y cómo se esperan los mutex (`ppc/hw_lock.s`):
 1. **Tortura de atómicos** (76.4.A) con las 5 variantes. Es lo más rápido y lo que más aclara.
 2. Si alguna variante es exacta y la actual no, **cambiar el parcheador** a esa secuencia (kernel, commpage, userland) y volver a probar el arranque.
 3. En paralelo, historial del mutex (76.4.B) e identidad del dueño (76.2).
+
+
+---
+
+# PARTE 77 — (informe del Mac) Tortura de atómicos: solo `dcbf` funciona
+
+2 hilos atados (uno por núcleo) × 2 000 000 incrementos = 4 000 000 correcto:
+| Variante | kernel con dcbst (smp47) | kernel con dcbf (smp48) |
+|---|---|---|
+| OSIncrementAtomic | 3 999 834 | **4 000 000** |
+| sin nada | 3 999 986 | 3 999 980 |
+| dcbst; stwcx. | 3 999 932 | 3 999 910 |
+| dcbst; sync; stwcx. | **3 417 032** | 3 497 047 |
+| **dcbf; stwcx.** | **4 000 000** | **4 000 000** |
+| sync; lwarx…dcbst; stwcx. | 3 999 917 | 3 999 861 |
+
+- Todos los stubs (kernel 142, `__VECTORS` 7, commpage y los 1472 de userland) pasan a **`dcbf`**.
+- smp48: atómicos correctos; PI/Latte normales, OHCI pasa; **más de 32 768 externas en cada núcleo**; los dos IDLE; **manzana sin SSH** a los ~7 min.
+
+---
+
+# PARTE 78 — Respuesta: con los atómicos ya bien, hay que ver el grafo de esperas completo
+
+## 78.1 Lo que enseña la tortura
+- Es la **primera prueba directa** del erratum, y cambia la receta: en Espresso, entre núcleos, **`dcbf` (vaciar e invalidar la línea propia) antes del `stwcx.` es lo único exacto**. `dcbst` deja la línea válida en la caché, y un `sync` en medio lo empeora mucho.
+- **Consecuencia importante:** cualquier sitio donde haya **otra operación de memoria o de sincronización entre `lwarx` y `stwcx.`** (`sync`, `eieio`, `isync`, cargas o almacenamientos a otra línea) puede seguir fallando aunque lleve `dcbf`. La variante 3 enseña que un `sync` en la ventana dispara las pérdidas.
+  - **Escanea el kernel:** para cada par `lwarx`…`stwcx.` parcheado, lista las instrucciones de la ventana. Marca las que tengan `sync`/`eieio`/`isync`/`dcb*`/`icbi`, o `lwz`/`stw` a **otra** dirección.
+  - Si aparece alguno (p. ej. en `hw_lock_mbits`, `hw_queue_atomic`, `hw_compare_and_store` o en los caminos de `mapping`/`sxlk` de `hw_vm.s`), añade a la tortura una variante "`lwarx; sync; addi; dcbf; stwcx.`" para saber si `dcbf` lo cubre.
+- Guarda la prueba de tortura como **autoprueba de arranque** (unas decenas de miles de iteraciones, un par de segundos) y píntala en verde o rojo. Así sabrás en cada mkext que el erratum está cubierto.
+
+## 78.2 Pregunta 3: recorrido de todos los hilos (mejor que un anillo)
+Con los dos núcleos ociosos, el sistema es una **foto fija**: todos los hilos del kernel están parados en algún sitio. Recórrelos desde el tick del núcleo 0 (o desde tu hilo de diagnóstico) y pinta una fila por hilo.
+- **Lista:** `pset->threads` (cabeza de cola) con el enlace `thread->pset_threads` (`kern/thread.h:288`, `kern/processor.c:337`). `pset = *(processor[0] + 0x18)`. Los offsets de `threads` dentro del pset y de `pset_threads` dentro del thread, sácalos de `otool -tv _pset_add_thread` (el `queue_enter` escribe en los dos).
+- **Por hilo:**
+  - puntero;
+  - `state` (TH_WAIT 1, TH_SUSP 2, TH_RUN 4, TH_UNINT 8, TH_TERMINATE 0x10, TH_IDLE 0x80);
+  - `sched_pri`;
+  - `wait_event` (+0x14);
+  - `continuation`;
+  - si TH_WAIT y **sin** continuación: los **3-4 primeros LR** de su pila (pcb +0x1A8 → `save_r1` +0x8C → marcos `[sp+8]`), como hiciste con OHCI;
+  - `task` (+0x25C), para distinguir los de usuario (atados al núcleo 0) de los del kernel.
+- **Cómo leerlo:**
+  - evento = `lck_mtx + 8` → lee el mutex y su dueño (74.1); busca el dueño **en la misma lista** y mira dónde espera. Así sigues la cadena hasta el que no espera un mutex (el "origen");
+  - evento en una `IOCommandGate`/`IOWorkLoop` → quién tiene el gate;
+  - evento `&_clock_delay_until` → un `IOSleep` (normal si es corto);
+  - hilos TH_RUN que nunca corren (con los núcleos ociosos) → problema de colas del planificador.
+- Si pintar todos es demasiado, filtra: solo TH_WAIT|TH_UNINT sin continuación (los "atascados de verdad") y pinta sus LR.
+
+## 78.3 Pregunta 1: ¿tormenta de IPI?
+- "Más de 32 768" en ~7 min son como poco ~80 por segundo por núcleo. No es necesariamente una tormenta: con el doze anulado pero `pfCanDoze` en `pf.Available`, **cada vez que el planificador da un hilo a un núcleo ocioso le manda `SIGPwake`**.
+- **Mide el ritmo**: dos lecturas separadas 1 s de `hwExternals` (+0x814) y de los contadores SIGP de los dos per_proc (`numSIGPast` +0x990, `numSIGPwake` +0x99C, `numSIGPtimo` +0x9A0, fusionadas +0x9A4/+0x9A8, `numSIGPcall` +0x9BC).
+  - Miles por segundo con los núcleos "IDLE" = tormenta (algo se reencola sin fin: un hilo que se despierta y se vuelve a dormir, o un timer a 0).
+  - Unas decenas o cientos = normal.
+- Si hay tormenta, mira también `hwContextSwitchs` (+0x890) por segundo. Un hilo que salta de núcleo en núcleo sin avanzar dejaría ese contador disparado, y el recorrido de 78.2 lo cazaría con `state = TH_RUN`.
+
+## 78.4 Pregunta 2: ¿otras operaciones "atómicas" en riesgo?
+- `hw_lock_bit`, `hw_compare_and_store`, `hw_atomic_*`, `hw_queue_atomic*`, `hw_lock_mbits`, los `sxlk*` de `hw_vm.s` y los `mapping` usan **`lwarx`/`stwcx.`**, así que ya llevan `dcbf`. Revisa la ventana de cada uno (78.1).
+- Las lecturas y escrituras normales (`lwz`/`stw`) entre núcleos son coherentes con CAR/BCR **si la página está mapeada con M=1** (lo normal en XNU). La excepción son los **alias no cacheables** (páginas cambiadas con `IOSetProcessorCacheMode`, DMA): ahí la regla es vaciar o invalidar la caché antes y después, y con ABE esas operaciones ya se difunden.
+- **`lwarx`/`stwcx.` en la commpage usados por el kernel:** no los hay. Los de usuario ya están atados al núcleo 0 (gancho de `thread_setrun`).
+
+## 78.5 Orden
+1. **Recorrido de hilos** (78.2) en la próxima manzana: cadena de esperas hasta el origen.
+2. **Ritmo de IPI/SIGP** en dos lecturas separadas 1 s (78.3).
+3. **Escaneo de ventanas** `lwarx`…`stwcx.` con instrucciones de por medio (78.1) y, si aparecen, variante de tortura para ellas.
+4. Autoprueba de atómicos en cada arranque.
