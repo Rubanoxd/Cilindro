@@ -41,7 +41,8 @@
 > - **Parte 39** — `WAKE(1)` → excepción 0x1700 en el núcleo 0.
 > - **Parte 40** — **0x1700 es la IPI de Espresso** (NetBSD `EXC_IPI`): redirigir el vector de XNU con 1 instrucción; `sync_cache64` para memoria baja; **orden actualizado (40.4)**.
 > - **Partes 41–42** — el núcleo 1 entra en XNU pero se cuelga en `cpu_sync_timebase`: **handshake por memoria sin coherencia**; valores HID de Nintendo en el trampolín, sonda de coherencia barata, orden 42.6.
-> - Si algo se contradice, vale la parte **más reciente** (42 > 41 > 40 > 39 > 38 > …).
+> - **Parte 43** — rutina de Nintendo 0x240–0x330 confirmada: HID por núcleo = los de 42.6; no hay init de L2 en ese tramo.
+> - Si algo se contradice, vale la parte **más reciente** (43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -58,7 +59,7 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
@@ -2936,3 +2937,15 @@ Es lo mismo que hace NetBSD, pero sin copiar código.
 4. Sonda 42.4 (sin XNU): validar coherencia en ambos sentidos.
 5. Reintentar el arranque SMP. Si se cuelga, pintar dentro de `cpu_sync_timebase` (42.4 final).
 6. Pedir al humano el volcado 0x08000240–0x330 para completar la init de L2.
+
+
+---
+
+# PARTE 43 — Rutina de Nintendo 0x08000240–0x330 (volcado de MEM0, del Mac)
+
+- 0x240–0x280, **solo en el núcleo 0**: SCR |= 0x80000000, CAR |= 0xFC100000, BCR = 0x08000000, isync.
+- 0x284–0x2F0, **en cada núcleo**: HID0 = 0x00110024, HID2 = 0x000F0000, HID4 = 0xB3B00000, HID5 |= 0x7FFDC000 (o |= 0x6FBD4300 si PVR&0xFFFF == 0x101), isync.
+  - Espresso aquí es PVR 0x70010201, así que corresponde **0x7FFDC000**. Esto confirma los valores de 42.2/42.6.
+- 0x2F4–0x330: MMCR0 = MMCR1 = 0, comprobación de la base sacada de THRM3 (bucle infinito si falla), punteros a su estructura, SPRG0 = 0.
+- **No hay init de L2** en este tramo. Está en 0x314/0x480/0x5E4 (**no hace falta** para el paso 42.6: el núcleo 1 arranca con L2CR = 0).
+- El paso 6 de 42.6 queda cumplido.
