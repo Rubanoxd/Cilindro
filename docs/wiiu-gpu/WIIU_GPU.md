@@ -52,7 +52,8 @@
 > - **Partes 57–58** — con 56.6 el núcleo 1 ya llega a `idle_thread` sin congelación; vuelve a faltar Latte 5 (OHCI0). La baliza 13 **no prueba** que esté ocioso: `idle_thread` salta al hilo recogido **sin pasar por más balizas**. Si `processor[1]->active_thread ≠ idle_thread`, el núcleo 1 está **ejecutando sin fin la action de OHCI** (58.2). PC del núcleo 1 con un stub en `_interrupt` (58.3).
 > - **Partes 59–60** — ¡escritorio con `hw.ncpu 2`! Pero el núcleo 1 está **muerto en un panic silencioso** (muy probablemente `panic("thread_terminate")`: `ast_taken` no vio AST_APC). Por eso el sistema funciona como UP y arranca; en smp33, con el núcleo 1 vivo, se colgaba OHCI. Cómo confirmarlo por SSH (60.3).
 > - **Partes 61–62** — el panic del núcleo 1 lo causaba el ping (la Parte 60 queda descartada). Con el núcleo 1 vivo, PI y Latte mask0 = 0: **no es un enrutado al núcleo 1**, es que el arranque se para **antes** de que ningún driver habilite interrupciones. Además, el filtro `Busy|Pass` puede **perder IPI reales** (62.2). Balizas de progreso de drivers (62.4).
-> - Si algo se contradice, vale la parte **más reciente** (62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 63–64** — congelación temprana intermitente tras el WAKE. El filtro por Busy no puede bloquear. Hay que ver el camino sin depender de hilos: **balizas que pintan directamente en el framebuffer** (64.2). Quitar escrituras de SCR sin lock y el bucle de ack sin límite (64.3).
+> - Si algo se contradice, vale la parte **más reciente** (64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -69,14 +70,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 62.5** (filtro de IPI por Busy + ping marcado; balizas de progreso de los drivers; PC del núcleo 0).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 64.5** (balizas que pintan en el FB; SCR solo con lock y ack acotado; sin ping; luego 62.4).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -3766,3 +3767,63 @@ Desde tu kext (o uno de prueba cargado por SSH), vuelca con `IOLog` y mira en `s
 2. Balizas de progreso de los `start()` y de `registerInterrupt`/`enableVector` (62.4.1) y PC del núcleo 0 (62.4.2).
 3. Arrancar. Si llega al escritorio con el núcleo 1 trabajando de verdad (prueba: dos bucles `sh` a la vez en ~14 s), **medir**. Si se para, la baliza sin salida y el PC dicen dónde.
 4. Después, volver a lo pendiente de OHCI si reaparece (58.4 / 52.4).
+
+
+---
+
+# PARTE 63 — (informe del Mac) smp36: congelación en el primer segundo tras el WAKE
+
+- Cambios: el handler se llama con solo **Busy**; `sync` antes de la `mtspr SCR`; filas con `MPsigpStat` de los dos per_proc. El ping sigue, sin flag.
+- smp36 **congelado**. El hilo de diagnóstico solo pintó su primera vuelta, **anterior al WAKE** (processor[1] state = 5 START).
+  - El núcleo 1 llegó al trampolín y a **`initCPU`** (11/12).
+  - **`processor_start(1)` no volvió** (14/15 sin pintar).
+  - Balizas del núcleo 0 hasta `thread_setrun`.
+- Historial: smp33 manzana (OHCI); smp34 escritorio (núcleo 1 muerto por el ping); smp35 manzana (máscaras a 0); smp36 congelado. **Es intermitente.**
+
+---
+
+# PARTE 64 — Respuesta: primero ver, luego quitar las fuentes de carrera del SCR
+
+## 64.1 ¿Puede bloquear el filtro por Busy? (pregunta 1) — No
+- Busy lo pone el emisor con `hw_lock_mbits` y Pass llega microsegundos después (`cpu.c:525-546`). `cpu_signal_handler` espera Pass hasta **~31 ms** y, si no llega, **hace panic**: no hay espera infinita (`cpu.c:575-579`).
+- El núcleo 1, dentro de `cpu_machine_init`, está a **splsched (EE=0)**: **no toma ninguna ICI**, así que no puede entrar en el handler ahí.
+- El núcleo 0 esperando `SignalReady` en `cpu_start` está **dormido** (`thread_sleep_simple_lock`), no girando. Si el núcleo 0 se congela, es porque **gira con EE=0 en otra parte** o porque **su reloj/decrementador dejó de funcionar**. En cualquiera de los dos casos, el hilo de diagnóstico deja de pintar.
+- Congelación sin panic ⇒ lo más probable es un **bucle sin límite con EE=0**. Los spinlocks de XNU tienen timeout, y el panic ya se vería (smp31 lo demostró). Los bucles sin límite que hay ahora son **tuyos**:
+  - el **bucle de ack** de estilo NetBSD `do { mtspr(SCR, spr & ~bit); spr = mfspr(SCR); } while (spr & bit)`;
+  - cualquier espera en el trampolín o en `startCPU`.
+
+## 64.2 Ver dónde se para cada núcleo sin depender de hilos (pregunta 2)
+**Recomendado: que las balizas pinten directamente en el framebuffer.**
+- En `WiiPE::start`/`startCPU` (antes del WAKE), obtén una **dirección virtual del framebuffer** que ya esté mapeada en el kernel. Por ejemplo, la del mapeo de VRAM de tu driver de framebuffer, o crea una con `IOMemoryDescriptor::withPhysicalAddress(0x8F000000, len)` → `map(kIOMapInhibitCache)` y guarda el `getVirtualAddress()`.
+- **Parchea esa dirección en los stubs** de baliza: `lis/ori` con la VA base.
+- Cada baliza hace, además del `stw` a lowGlo, **2-4 `stw` de un color** en `FB + fila(cpu)·pitch·8 + columna(n)·16`, es decir, un bloque pequeño. Usa un color distinto por núcleo y deja la fila del núcleo en blanco al principio.
+- Con mapeo sin caché, el píxel aparece al instante. Con caché, añade `dcbst 0,rX; sync`.
+- Así funciona aunque los dos núcleos estén con EE=0, sin hilo ni planificador. Con la capturadora ves el **último bloque pintado** de cada núcleo.
+- **No uses BAT:** XNU gestiona sus BATs (`shadow_BAT`) y en modo virtual es más arriesgado que un mapeo normal.
+- Añade balizas en **tu** código crítico (en C, escribiendo al FB igual):
+  - `handleInterrupt` (entrada/salida por núcleo);
+  - dentro del bucle de ack (una por vuelta: si se queda pintada, está ahí);
+  - `wiiSCRModify` (entrada/lock/mtspr/salida);
+  - `cpu_signal_handler` (entrada/salida);
+  - y en el camino del núcleo 1: tras `PE_cpu_machine_init`, espera de `SignalReady` del maestro, `ml_init_interrupt`, antes de `SignalReady`, `thread_wakeup` final y `clock_init`.
+- **El bucle en `startCPU` con EE=0** también vale, pero como **experimento de aislamiento**, no como diagnóstico principal: el núcleo 0 queda aparcado varios segundos mientras el núcleo 1 recorre su arranque. Si así el núcleo 1 llega a `SignalReady` e `idle_thread`, el fallo está en la **interacción** con el núcleo 0 (IPI/SCR), no en el camino del núcleo 1.
+
+## 64.3 Quitar las carreras del camino del WAKE (pregunta 3)
+1. **Acota el bucle de ack**: máximo 1000 vueltas. Si se agota, incrementa un contador de fallo y sal. Un bucle sin límite con EE=0 es exactamente una congelación sin panic.
+2. **Todas las escrituras de SCR con el mismo lock**, incluidos el WAKE, el set de IPI y el ack. **Quita el "si no consigo el lock, `mtspr` igualmente"** salvo en el caso de **recursión detectada** (camino de panic).
+   - Esa escritura sin lock usa un valor de SCR leído antes. Puede **reponer bits viejos** (volver a poner un IPI ya reconocido) o, peor, **escribir los bits de WAKE/control con un valor antiguo**.
+   - Recuerda que quitar el WAKE al núcleo 1 no lo relanza (Parte 43b): podría **congelarlo en cualquier punto** de `cpu_machine_init`, que es justo lo que ves (llega a `initCPU` y no a `SignalReady`).
+3. **En el RMW de SCR, toca solo el bit que te interesa** y conserva los demás **leyendo SCR dentro del lock justo antes de escribir**. Nunca escribas un valor calculado fuera del lock.
+4. **Quita el ping.** Ya no hace falta (el núcleo 1 funciona) y añade tráfico de SCR justo en el WAKE. Para el PC del núcleo 1 ya tienes las balizas en el FB.
+5. Mantén el `sync` antes de la `mtspr` y el filtro por **Busy**.
+6. En el trampolín y en `startCPU`, revisa que no quede **ninguna** espera sin límite. Toda espera debe tener tope de iteraciones o de TB.
+
+## 64.4 Por qué va y viene
+- Las cuatro últimas pruebas cambian el **calendario** de SCR (ping sí/no, filtro, `sync`). Un fallo que depende de dos núcleos escribiendo SCR a la vez (64.3.2) o de un bucle sin límite (64.3.1) aparece o no según ese calendario.
+- smp33-35 no se congelaron por suerte de tiempos, no porque estuviera arreglado.
+
+## 64.5 Orden
+1. Balizas que pintan en el FB (64.2), incluidas las de tu código de SCR/IPI.
+2. 64.3: ack acotado, todas las escrituras de SCR con lock y sin la escritura de respaldo, RMW dentro del lock, sin ping.
+3. Arrancar varias veces (3-4). Si hay congelación, el último bloque de cada núcleo dice dónde.
+4. Si arranca de forma estable: seguir con 62.4 (balizas de `start()` de drivers) y la prueba de paralelismo (dos bucles `sh`).
