@@ -51,7 +51,8 @@
 > - **Partes 55–56** — el núcleo 1 se queda en su **hilo de arranque después de SignalReady** (antes del primer cambio de contexto) y el núcleo 0 se congela a la vez **sin panic visible**. Muy probable: un panic/timeout de lock cuyo camino (`Debugger` → `cpu_signal(SIGPdebug)` → tu `signalCPU`) se bloquea. Balizas exactas y gancho en `_panic` (56.4).
 > - **Partes 57–58** — con 56.6 el núcleo 1 ya llega a `idle_thread` sin congelación; vuelve a faltar Latte 5 (OHCI0). La baliza 13 **no prueba** que esté ocioso: `idle_thread` salta al hilo recogido **sin pasar por más balizas**. Si `processor[1]->active_thread ≠ idle_thread`, el núcleo 1 está **ejecutando sin fin la action de OHCI** (58.2). PC del núcleo 1 con un stub en `_interrupt` (58.3).
 > - **Partes 59–60** — ¡escritorio con `hw.ncpu 2`! Pero el núcleo 1 está **muerto en un panic silencioso** (muy probablemente `panic("thread_terminate")`: `ast_taken` no vio AST_APC). Por eso el sistema funciona como UP y arranca; en smp33, con el núcleo 1 vivo, se colgaba OHCI. Cómo confirmarlo por SSH (60.3).
-> - Si algo se contradice, vale la parte **más reciente** (60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 61–62** — el panic del núcleo 1 lo causaba el ping (la Parte 60 queda descartada). Con el núcleo 1 vivo, PI y Latte mask0 = 0: **no es un enrutado al núcleo 1**, es que el arranque se para **antes** de que ningún driver habilite interrupciones. Además, el filtro `Busy|Pass` puede **perder IPI reales** (62.2). Balizas de progreso de drivers (62.4).
+> - Si algo se contradice, vale la parte **más reciente** (62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -68,14 +69,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 60.6** (leer panicstr/debug_buf y thread->ast por SSH; revisar stubs de hw_atomic_*).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 62.5** (filtro de IPI por Busy + ping marcado; balizas de progreso de los drivers; PC del núcleo 0).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -3709,3 +3710,59 @@ Desde tu kext (o uno de prueba cargado por SSH), vuelca con `IOLog` y mira en `s
 2. Revisar los stubs dcbst de `hw_atomic_*` y `hw_compare_and_store` (60.4).
 3. Arreglado (A), volverá a verse (B) con OHCI. Entonces, con el núcleo 1 vivo y SSH disponible si llega a arrancar, aplicar el arreglo de WiiOHCI (58.4 / 52.4): el filtro solo lee y reconoce el estado; las listas y TDs solo se tocan en la action bajo el gate, o con un spinlock común.
 4. El ping por SCR se puede quitar: no es lo que hace arrancar.
+
+
+---
+
+# PARTE 61 — (informe del Mac) El panic lo causaba el ping; con el filtro, el núcleo 1 vive y las máscaras quedan a 0
+
+- smp34 por SSH con /dev/kmem:
+  - `paniccpu` = 1; `panic_caller` = `cpu_signal_handler+0x50` → **"cpu_signal_handler: Lock pass timed out"**.
+  - El ping por SCR (sin mensaje SIGP) hacía que `handleInterrupt` llamara a `cpu_signal_handler`, que entra en panic si no hay Busy|Pass. **La hipótesis (A) de la Parte 60 queda descartada.**
+  - Offsets confirmados: `thread->ast` +0x278; `per_proc->pending_ast` +0x1C; `MPsigpStat` +0x80. per_proc[1]: física 0x113DF000, virtual 0x02CF2000.
+- smp35: solo llama a `cpu_signal_handler` si `(MPsigpStat & 0xC0000000) == 0xC0000000`.
+  - **Núcleo 1 sano y ocioso** (IDLE, `idle_count` = 1, PC en `idle_thread`); recibe muchas interrupciones.
+  - **Núcleo 0: 0 externas** en todo el arranque.
+  - PI mask0 = **0**, Latte mask0 = **0**. OHCI no llegó a `start`. Manzana, sin SSH.
+
+---
+
+# PARTE 62 — Respuesta: las máscaras están a 0 porque nadie ha habilitado nada todavía
+
+## 62.1 ¿Enrutado al núcleo 1? No (preguntas 1 y 3)
+- El PI tiene **INTSR/INTMSK por núcleo** (`0x0C000078 + 8·n` / `0x0C00007C + 8·n`; NetBSD `wiiu.h:60-61`). Una fuente solo llega a un núcleo si su bit está en **el INTMSK de ese núcleo** (NetBSD `pic_pi.c`: la afinidad se consigue solo con la máscara). Lo mismo vale para Latte (`0x0D800440 + 0x10·n`). Con INTMSK(1)=0 y los de Latte PPC1 a 0, **ninguna** interrupción de dispositivo puede llegar al núcleo 1.
+- El código de osx-drivers usa **direcciones fijas del núcleo 0**: `readCafeIntMask32(0)`/`writeCafeIntMask32(0,…)` (`WiiInterruptController.cpp:147/215/236`) y la base PPC0 de Latte sin índice por núcleo (`LatteInterruptController.cpp:147-256`). Comprueba que tu versión con máscara sombra (Parte 46) conserva el índice **0** fijo y no usa `cpu_number()`.
+- Lo que recibe el núcleo 1 son **IPI**: `SIGPwake`/`SIGPast` del planificador. Ahora que está ocioso y en `idle_queue`, `thread_setrun` le da hilos continuamente y `machine_signal_idle` le manda SIGPwake (pf.Available conserva `pfCanDoze`). Por eso hay más que pings.
+- **Máscaras a 0 = estado recién inicializado.** Los dos controladores ponen todo a 0 en `start` (`WiiInterruptController.cpp:64-74`, `LatteInterruptController.cpp:64-76`). En smp27-34, a estas alturas ya estaban PI 24 (cascada de Latte), PI 4/6 y Latte 5/7. Ahora **ni la cascada 24** está habilitada, así que el arranque de IOKit se ha parado **antes** de que Latte se enganche al PI y de que SDHC/OHCI habiliten sus fuentes. Encaja con que OHCI no llegara a `start`.
+- **No cambies ninguna de las dos cosas que propones:** las direcciones ya son las del núcleo 0, y el núcleo 1 no debe despachar fuentes de dispositivo (mantén INTMSK(1)=0).
+
+## 62.2 Tu filtro de IPI puede perder IPI reales (arréglalo ya)
+- El emisor (`cpu_signal`, `ppc/cpu.c:525-546`) hace: `hw_lock_mbits` → **Busy**; rellena Parm0-2; `sync`; `MPsigpStat = Busy|Pass|…`; `eieio`; `PE_cpu_signal` → tu `mtspr SCR`.
+- **`eieio` no ordena un store cacheable respecto a un `mtspr`.** La ICI puede llegar antes de que el receptor vea **Pass**.
+- `cpu_signal_handler` ya lo contempla: **espera hasta ~31 ms** a que aparezca Busy|Pass (`cpu.c:575-579`, `timebase >> 5`). Pero tu filtro exige `0xC0000000` **en el primer vistazo**. Si solo ve Busy, **descarta la IPI**; el mensaje queda pendiente (`MPsigpMsgp`) para siempre y los siguientes SIGPast/SIGPwake a ese núcleo se **fusionan sin enviarse** (46.4).
+- **Arreglo:**
+  1. Filtra por **Busy** solamente: `if (MPsigpStat & 0x80000000) cpu_signal_handler();`. Un ping puro no tiene Busy; uno real sí, desde antes de la `mtspr`.
+  2. En `signalCPU`, pon un **`sync`** antes de la `mtspr SCR`. Así el receptor ve Busy|Pass antes que la ICI.
+  3. Mejor todavía: **quita el ping** o márcalo con un flag propio (`gPingPending[cpu] = 1; sync; mtspr`) que el receptor consume sin llamar a XNU.
+
+## 62.3 Por qué ahora se para antes (hipótesis)
+- Es la **primera vez** que el núcleo 1 ejecuta hilos de IOKit **desde el principio del matching**. En smp27-33 moría pronto o se quedaba en su hilo de arranque, y en smp34 estaba aparcado por el panic. Ahora hay concurrencia real entre los `start()` de los drivers de Wiintosh (PE, CPU, PI, Latte, SDHC, USB…), que corren en hilos de matching distintos.
+- Candidatos (por orden):
+  1. **IPI perdida** por el filtro de 62.2. Un hilo que espera un wakeup cruzado entre núcleos no se entera: la cola del núcleo destino queda con `MPsigpMsgp` y las siguientes señales se fusionan.
+  2. **Un driver de Wiintosh que no es seguro en SMP en su `start`**: estado compartido sin lock entre `WiiInterruptController::start`, `LatteInterruptController::start` y el PE (registro del controlador, `registerInterruptController`, `waitForService`), o un flag de "listo" sondeado sin barrera.
+  3. **El hilo de diagnóstico y el ping** cambian el calendario, igual que el IPC (54.4).
+
+## 62.4 Qué pintar (pregunta 2)
+1. **Balizas de progreso en C** (en tu código, sin stubs), cada una un bit en una palabra de lowGlo que pinta el hilo de diagnóstico:
+   - entrada y salida de `start()` de: WiiPE, WiiCPU 0, WiiCPU 1, WiiInterruptController (PI), LatteInterruptController, el driver SDHC, WiiUSB/OHCI0 y los demás de osx-drivers;
+   - `registerInterrupt` y `enableInterrupt`/`enableVector` de PI y de Latte (el primer `enableVector(24)` del PI es la cascada de Latte).
+   La primera baliza de entrada **sin** su salida te dice qué `start()` se ha quedado atascado.
+2. **PC del núcleo 0**: el mismo ping, pero hacia el núcleo 0 (con el flag de 62.2.3), guardando `save_srr0`/`save_lr` desde `gSSP[0]` (58.3). Si el núcleo 0 también está en `idle_thread`, todo el sistema espera un evento que no llega (wakeup o IPI perdidos). Si está en un bucle, ya tienes dónde.
+3. **Verificación del enrutado** (opcional): PI `INTSR(1)`/`INTMSK(1)` en `0x0C000080`/`0x0C000084` y Latte PPC1 en `0x0D800450`–`0x45C`. Deben dar mask = 0. Y en `handleInterrupt(1)`, contadores separados de: IPI con Busy (reales), ping (flag) y "nada" (espurias).
+4. `MPsigpStat` de **los dos** per_proc (+0x80): un `0xC00004xx` fijo durante segundos es un mensaje perdido.
+
+## 62.5 Orden
+1. Filtro por **Busy** + `sync` antes de la `mtspr` en `signalCPU` + ping marcado con flag (o quitarlo) (62.2).
+2. Balizas de progreso de los `start()` y de `registerInterrupt`/`enableVector` (62.4.1) y PC del núcleo 0 (62.4.2).
+3. Arrancar. Si llega al escritorio con el núcleo 1 trabajando de verdad (prueba: dos bucles `sh` a la vez en ~14 s), **medir**. Si se para, la baliza sin salida y el PC dicen dónde.
+4. Después, volver a lo pendiente de OHCI si reaparece (58.4 / 52.4).
