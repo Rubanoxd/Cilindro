@@ -60,7 +60,8 @@
 > - **Partes 73–74** — pila del hilo de OHCI: `wireVirtual` → `vm_map_create_upl` → espera el **mutex de un vm_object** (evento = mutex + 8 → **lck_mtx en 0x0038F27C**, muy probablemente `kernel_object`). Cómo leer dueño/WAIT y la pila del dueño (74.1). Los parches UP de barreras **no** se aplican con 2 CPU, pero verifícalo (74.2).
 > - **Partes 75–76** — el mutex que espera OHCI (0x02AEE9E0) marca como dueño a un hilo que ya no lo tiene, con WAIT y 8 esperando. La firma encaja con un **`stwcx.` que "acierta" sin deber** en el unlock rápido: el erratum sigue vivo entre núcleos aunque haya dcbst+ABE. **Prueba decisiva: tortura de atómicos con dos hilos atados a cada núcleo** (76.3) y registro del historial de ese mutex (76.4).
 > - **Partes 77–78** — **el apaño correcto del erratum es `dcbf` antes de `stwcx.`** (`dcbst` pierde incrementos; `dcbst;sync` pierde muchísimos). Aplicado en todo. Sigue la manzana con los dos núcleos ociosos: toca un **recorrido de todos los hilos** (estado, evento, pila) para ver quién espera a quién (78.2).
-> - Si algo se contradice, vale la parte **más reciente** (78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 79–80** — `dcbf` cubre también las ventanas con `lwz`/`stw`/`eieio`. Ahora hay una **tormenta de SIGP** (7-17 mil/s) con cambios de contexto normales: es un **livelock** (un hilo que reintenta sin fin: `mutex_pause`, `lock_try`, `thread_block` en bucle), no un fallo de las IPI. Hay que **cazar el hilo caliente** (80.3).
+> - Si algo se contradice, vale la parte **más reciente** (80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -77,14 +78,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 78.5** (recorrido de hilos + ventanas lwarx…stwcx. con sync + ritmo de IPI).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 80.5** (SIGPast y SIGPwake por separado; hilo caliente en `thread_setrun`; su pila).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -4341,3 +4342,57 @@ Con los dos núcleos ociosos, el sistema es una **foto fija**: todos los hilos d
 2. **Ritmo de IPI/SIGP** en dos lecturas separadas 1 s (78.3).
 3. **Escaneo de ventanas** `lwarx`…`stwcx.` con instrucciones de por medio (78.1) y, si aparecen, variante de tortura para ellas.
 4. Autoprueba de atómicos en cada arranque.
+
+
+---
+
+# PARTE 79 — (informe del Mac) Las ventanas van bien con dcbf; tormenta de IPI
+
+- Tortura smp49: OSIncrementAtomic y `dcbf` = 4 000 000. Nuevas variantes con `lwz`+`stw` a otra línea y con `stw`+`eieio` dentro de la ventana, más `dcbf`: **4 000 000**. No hace falta tocar más el parcheo.
+- Ritmos por segundo:
+  - núcleo 0: hwExternals ≈ **7 000**, SIGPast+SIGPwake recibidas ≈ 7 000, cambios de contexto ≈ **780**;
+  - núcleo 1: hwExternals ≈ **17 000**, SIGP ≈ 17 000, cambios de contexto ≈ **320**;
+  - timo = 0, fusionadas ≈ 1-2.
+- Los dos en `idle_thread` en la instantánea; manzana, sin SSH.
+
+---
+
+# PARTE 80 — Respuesta: es un livelock; hay que encontrar el hilo que no para de despertarse
+
+## 80.1 Qué dice el patrón
+- **Miles de SIGP por segundo, cientos de cambios de contexto por segundo y ningún avance.** No es que las IPI fallen (timo = 0, casi nada fusionado). Es que algo **genera trabajo de planificación sin parar**: uno o varios hilos que se despiertan, miran una condición que nunca se cumple y vuelven a dormir (o ceden la CPU), una y otra vez.
+- En UP ese bucle también existiría, pero sería barato (se queda en el mismo núcleo). Con dos núcleos **cada vuelta rebota al otro**:
+  - `thread_setrun` ve al otro núcleo ocioso → `next_thread` + `SIGPwake` (`sched_prim.c:1985-2030`);
+  - o lo ve ejecutando algo de menor prioridad → `cause_ast_check` → `SIGPast` (`sched_prim.c:2080-2112`, y el camino "bound" en 2155-2163).
+- Los dos núcleos aparecen "IDLE" en la foto porque cada vuelta dura microsegundos.
+- **Candidatos típicos en xnu-792** (bucles de "reintenta un poco más tarde"):
+  - **`mutex_pause()`** (duerme ~1 ms y reintenta; `kern/locks.c`, usado en 12 sitios: `vm_fault.c:1727`, `vm_map.c:10230/10285`, `vm_object.c:618/652/2044/2163/4920`…) cuando un `lock_try`/`vm_object_lock_try` **falla siempre**. Por ejemplo, porque ese lock tiene un "dueño" que ya no lo tiene (Parte 75), o por una página que se queda en "busy";
+  - un workloop que se re-señala a sí mismo (`checkForWork` devuelve `more = true` siempre);
+  - un hilo en `thread_block(THREAD_CONTINUE_NULL)` / `thread_yield` en bucle, sondeando un flag;
+  - timers con plazo ya vencido que se re-arman sin fin.
+
+## 80.2 Pregunta 2: `pfCanDoze` y el gancho de `thread_setrun`
+- **Quita `pfCanDoze` (0x02000000) de `pf.Available` de los dos per_proc.** Hazlo después de `allstart`, que lo reescribe: por ejemplo en `WiiCPU::initCPU` de cada núcleo o desde tu hilo de diagnóstico tras el WAKE. Con el doze anulado, el `SIGPwake` no sirve (el bucle ocioso ya sondea), y así te quedas solo con los SIGPast "de verdad" y la foto se ve más limpia.
+  - Offset de `pf.Available`: el `lwz rX,N(r3)` de `_machine_signal_idle` seguido del `andis.` con `0x0200|…` (`machine_routines.c:325-334`).
+  - No es la causa (el bucle seguiría), pero reduce ruido y trabajo.
+- **Mantén el gancho de `thread_setrun`** mientras userland no esté parcheado entero (solo el 5 % de los sitios). Con él, un hilo de usuario **siempre** va a la cola local del núcleo 0 y, si el núcleo 0 está ejecutando algo de menos prioridad, se manda `SIGPast` al 0. Es lo esperado, pero cuenta para la tormenta: separa los SIGPast por origen (80.3).
+
+## 80.3 Pregunta 3: qué pintar para cazar al culpable
+1. **SIGPast y SIGPwake por separado** en cada núcleo (+0x990 y +0x99C del receptor), por segundo.
+2. **Contadores con LR** en la entrada de:
+   - `_cause_ast_check`: contador por núcleo destino + **histograma de LR** (4-8 cubetas: los LR de los distintos `cause_ast_check` de `thread_setrun`, el camino "bound", `ast_check`…);
+   - `_machine_signal_idle`: contador por destino.
+3. **El hilo caliente:** en la entrada de `_thread_setrun` (ya tienes gancho), guarda `r3` (thread) en un **histograma pequeño** (16 entradas: puntero y contador; si no está, reemplaza la de menor cuenta). Píntalo cada segundo. El hilo con miles de `setrun`/s es el culpable.
+   - De ese hilo: `task` (+0x25C: ¿kernel o usuario?), `sched_pri`, `continuation` y, cuando esté TH_WAIT, su **pila** (pcb +0x1A8 → r1 +0x8C → LR en `[sp+8]`, 4-6 niveles).
+   - `wait_event`: si es `&_mutex_pause`, es un bucle de `mutex_pause` (80.1). Entonces el LR de la pila dice qué `lock_try` falla, y el lock correspondiente (su `data`/dueño, como en 74.1) dirá por qué.
+4. Con un hilo de usuario caliente (task ≠ kernel_task), mira su **SRR0 de usuario** (`upcb`) para saber qué proceso y biblioteca giran: podría ser un spinlock de usuario de los binarios sin parchear (solo corre en el núcleo 0, pero reintenta con `thread_switch`/`swtch_pri`).
+
+## 80.4 Si resulta ser un lock con "dueño fantasma" otra vez
+- Sería un resto del erratum en algún sitio no cubierto. Por ejemplo, un `lwarx`/`stwcx.` **en un kext o en código generado en tiempo de ejecución**, o un `stwcx.` que el filtro de ≤16 instrucciones no emparejó y quedó sin `dcbf`.
+- Revisa la lista de los **23 `stwcx.` excluidos** (plantillas de la commpage y `stwcx. rX,rY,r1`): confirma que todos los excluidos son de verdad "anular reserva" (sin `lwarx` antes con el mismo rA/rB). Si alguno es un atómico real con la `lwarx` más lejos de 16 instrucciones, parchéalo.
+
+## 80.5 Orden
+1. Quitar `pfCanDoze` de los dos `pf.Available` (80.2).
+2. SIGPast/SIGPwake por separado + histograma de LR de `cause_ast_check` + **histograma de hilos en `thread_setrun`** (80.3).
+3. Del hilo caliente: task, prioridad, `wait_event`, continuación y pila. Si es `mutex_pause`, seguir el lock (74.1).
+4. Revisar los 23 `stwcx.` excluidos (80.4).
