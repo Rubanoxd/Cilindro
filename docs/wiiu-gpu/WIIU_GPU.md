@@ -57,7 +57,8 @@
 > - **Partes 67–68** — IOSleep no era. **Causa global probable: falta `HID0[ABE]` (0x8) en los dos núcleos** → `tlbie`, `dcbf`/`dcbi`/`dcbst`/`icbi` y `sync` **no se difunden** al otro núcleo (NetBSD lo activa para MP en Espresso). Eso deja TLB y líneas de caché viejas en el otro núcleo → DMA/E/S que nunca termina y cuelgues aleatorios. **No** actives HID4[SBE] (son BAT 4-7, explica la muerte de la Parte 45).
 > - **Partes 69–70** — con ABE el núcleo 1 ya ejecuta **procesos de usuario** y el arranque llega a la pantalla gris. La parada ahora cuadra con el **erratum lwarx/stwcx. en userland** (libSystem, CoreGraphics…, sin `dcbst`), que Linux corrige recompilando gcc/glibc. Plan: parchear los binarios de usuario **en arranque UP por SSH** con stubs dentro de su propio `__TEXT` (70.3).
 > - **Partes 71–72** — el parche de userland solo cabe en el 5% de los sitios. Plan: **atar los hilos de usuario al núcleo 0** con un gancho en `thread_setrun` (72.1) y dejar el SMP para los hilos del kernel; los stubs completos, más adelante. Hilo de OHCI dormido en 0x00F98F44: **sacar su pila completa** desde su savearea (72.2).
-> - Si algo se contradice, vale la parte **más reciente** (72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 73–74** — pila del hilo de OHCI: `wireVirtual` → `vm_map_create_upl` → espera el **mutex de un vm_object** (evento = mutex + 8 → **lck_mtx en 0x0038F27C**, muy probablemente `kernel_object`). Cómo leer dueño/WAIT y la pila del dueño (74.1). Los parches UP de barreras **no** se aplican con 2 CPU, pero verifícalo (74.2).
+> - Si algo se contradice, vale la parte **más reciente** (74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -74,14 +75,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 72.5** (pila del hilo dormido; hilos de usuario atados al núcleo 0).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 74.4** (leer el lck_mtx 0x0038F27C: dueño, WAIT, waiters; pila del dueño; comprobar barreras).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -4134,3 +4135,63 @@ Mecanismos que hacen que un wakeup se pierda "a veces" con dos CPU en xnu-792:
 2. **Gancho en `thread_setrun`** que ata los hilos de usuario al núcleo 0 (72.1), instalado antes del WAKE.
 3. Revisar que todo `stwcx.` del kernel y de los kexts cargados tenga su `dcbst` (72.3.1) y que HID0 del núcleo 1 tenga ABE.
 4. Arrancar 3-4 veces. Si llega al escritorio: medir (dos bucles `sh` en el kernel no se paralelizan con 72.1; prueba con E/S de disco y red, que sí usan hilos del kernel).
+
+
+---
+
+# PARTE 73 — (informe del Mac) Pila del hilo dormido de OHCI
+
+- 72.3: ningún kext cargado tiene `stwcx.`. En el kernel: `__TEXT,__text` 165 (se parchean 142; se excluyen las plantillas de la commpage y los `stwcx. rX,rY,r1`) y `__VECTORS` 7. `__HIB` no tiene ninguno.
+- 72.1 (userland atado al núcleo 0, `thread->task` +0x25C, `bound_processor` +0xB8): **no cambia nada**. La parada es del kernel.
+- Pila (savearea en `thread+0x1A8`):
+  `Switch_context` ← `machine_switch_context` ← `thread_invoke` ← `thread_block_reason` ← (smp43) `thread_sleep_mutex` / (smp44) camino lento de `lck_mtx` ← [función estática tras `vm_object_reaper_init`] ← **`vm_map_create_upl+0x5BC`** ← **`IOGeneralMemoryDescriptor::wireVirtual+0x2FC`**.
+- wait_event = **0x0038F284** (datos estáticos, entre `_scc` y `_wait_queues`); wait_queue = `_wait_queues+0x370`.
+
+---
+
+# PARTE 74 — Respuesta: leer el mutex, su dueño y sus banderas
+
+## 74.1 Pregunta 1: dónde está el dueño
+- **El evento de un `lck_mtx` no es el mutex.** `lck_mtx_lock_wait` hace `assert_wait((event_t)(((unsigned int*)lck) + ((sizeof(lck_mtx_t)-1)/sizeof(unsigned int))), THREAD_UNINT)` (`kern/locks.c:555`). `sizeof(lck_mtx_t)` = 12, así que el evento es **`lck + 8`** (la última palabra).
+  - Por tanto el mutex está en **0x0038F284 − 8 = 0x0038F27C**.
+- **Qué objeto es:** `struct vm_object { queue_head_t memq; decl_mutex_data(,Lock) … }` (`vm/vm_object.h:93-95`), así que el `Lock` está en **objeto + 8**. `kernel_object` apunta a `kernel_object_store`, que es **estático** (`vm/vm_object.c:199-200`). Lee el puntero global `_kernel_object`:
+  - si `*_kernel_object + 8 == 0x0038F27C` (o sea, `kernel_object_store` = 0x0038F274), es el **lock de kernel_object**;
+  - si no, prueba `vm_submap_object_store` (también estático, `vm_object.c:208`) con el mismo cálculo.
+- **Formato del mutex** (`ppc/locks.h:69-90` y `ppc/hw_lock.s:31-32`):
+| Offset | Campo |
+|---|---|
+| +0x0 | `lck_mtx_data`: **dueño = data & ~3**, bit 0 = `ILK_LOCKED` (interlock), bit 1 = `WAIT_FLAG` (hay esperas) |
+| +0x4 (u16) | `lck_mtx_waiters` |
+| +0x6 (u16) | `lck_mtx_pri` |
+| +0x8 | relleno → **es el evento de espera** |
+- **Qué significa cada caso:**
+| data | waiters | Diagnóstico |
+|---|---|---|
+| dueño **X ≠ 0** | ≥ 1 | Alguien tiene el lock. Saca la **pila de X** (misma técnica: `X+0x1A8` → savearea → r1 → marcos). Mira también `X->state`: si X duerme, sigue la cadena; si X no existe o está terminado, se perdió un unlock |
+| **0** (libre) | ≥ 1 y/o WAIT=1 | **Wakeup perdido**: el mutex se liberó, pero el despertar (`thread_wakeup_one` en `lck_mtx_unlock_wakeup`, `locks.c:625-672`) no llegó o no se hizo. Apunta a los atómicos, las barreras o la coherencia del camino lento |
+| 0 | 0 | El hilo no espera este mutex. Revisa el cálculo (quizá smp44 tuvo otro evento) |
+| con **ILK = 1** fijo | — | El interlock quedó tomado; alguien murió dentro de la sección crítica del camino lento |
+- **smp43 y smp44 esperan en sitios distintos:**
+  - smp43: `thread_sleep_mutex`. Es `vm_object_wait`/`PAGE_SLEEP`: duerme en un **evento del objeto o de una página** (página "busy", `paging_in_progress`) soltando el mutex. El evento sería la página o `objeto + offset`.
+  - smp44: el camino lento de `lck_mtx`, esperando **el mutex** mismo.
+  - Los dos son el mismo "cuello": `kernel_object` durante `vm_map_create_upl`. Otra cosa lo tiene cogido o tiene páginas en "busy" sin terminar.
+
+## 74.2 Preguntas 2 y 3: ¿el kernel se autoparchea en modo UP?
+- **Sí existe ese autoparcheo, pero solo si hay 1 CPU:** `ml_init_max_cpus` (`ppc/machine_routines.c:455-493`) recorre `patch_up_table` (líneas 98-133) y **cambia por `nop`** los `isync`/`eieio` de los locks **solo si `machine_info.logical_cpu_max == 1`**. Con `WiiSMPCPUs = 2`, `initCPUInterruptController(2)` llama a `ml_init_max_cpus(2)` y **no se aplica**.
+- El otro parcheo (`patch_table`, `ppc_init.c:92-120`) cambia `isync`/`eieio` por **`lwsync`** solo con la característica `PatchLwsync` (G5), que Espresso no tiene.
+- **Compruébalo en memoria** (es barato): lee las palabras en los símbolos de `patch_up_table`: `_hwllckPatch_isync`, `_hwulckPatch_isync`, `_hwulckPatch_eieio`, `_mlckPatch_isync`, `_mlckePatch_isync`, `_mulckPatch_isync`, `_mulckPatch_eieio`, `_mulckePatch_isync`, `_mulckePatch_eieio`, `_slckPatch_isync`, `_sulckPatch_isync`, `_sulckPatch_eieio`, `_rwl*Patch_*`, `_hwcsatomicPatch_isync`, `_entfsectPatch_isync`, `_retfsectPatch_*`. Deben valer:
+  - `isync` = **0x4C00012C**, `eieio` = **0x7C0006AC**;
+  - si alguno es `nop` (0x60000000) o `lwsync` (0x7C2004AC), el kernel se parcheó para UP o G5. Restáuralos con `ml_phys_write` + `sync_cache64` en `WiiPE::start`, **antes** del WAKE.
+- **Tu parcheador de `stwcx.`** toca las mismas funciones (p. ej. `mluLoop` de `lck_mtx_unlock`: `lwarx r5,0,r3 … stwcx. r5,0,r3`, `hw_lock.s:1468-1474`). Verifica que el stub de ese sitio usa `dcbst 0,r3` y vuelve al `bne-- mluLoop`. Y que ningún stub cae **encima** de una etiqueta `*Patch_isync`/`*Patch_eieio` (si parcheas por offset, podrías haber pisado una barrera).
+
+## 74.3 Cómo es el unlock (para interpretar 74.1)
+`lck_mtx_unlock` (`hw_lock.s:1455-1509`):
+- rápido: `isync; eieio; lwarx data; si (data & 3) → lento; stwcx. 0`;
+- lento: coge el interlock (`lockDisa`) → si `WAIT_FLAG` → `lck_mtx_unlock_wakeup` (→ `thread_wakeup_one(lck+8)`) → `eieio; stw (data & WAIT_FLAG)`.
+Un wakeup perdido requiere que el bit WAIT no se viera (atómico o coherencia) o que `thread_wakeup_one` no encontrara al hilo en la `wait_queue` (otra corrupción de lock de `wait_queue`). Si 74.1 da "libre con waiters", mira también la `wait_queue` `_wait_queues+0x370`: su lock (primera palabra) y si el hilo sigue en su cola.
+
+## 74.4 Orden
+1. En la próxima parada: leer `0x0038F27C` (data, waiters, pri) y `*_kernel_object`. Aplicar la tabla de 74.1.
+2. Si hay dueño X: pila de X (y su estado). Si X duerme en otra cosa, seguir la cadena.
+3. Comprobar las palabras de barrera de 74.2 y el stub de `mluLoop`.
+4. Con eso sabremos si es un **dueño bloqueado** (cadena de esperas en la VM, p. ej. una página "busy" que no termina porque su E/S no acaba) o un **wakeup perdido** (atómicos/barreras).
