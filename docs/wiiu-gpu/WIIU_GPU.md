@@ -37,8 +37,10 @@
 > - **Parte 35** — ✅ Parche de `stwcx.` en caliente (142 sitios) probado en UP.
 > - **Parte 36** — Escaneo con símbolos en el arranque, qué entra en `-wiismp cpus=1`, kexts.
 > - **Parte 37** — ✅ Parche de `stwcx.` en el arranque (142); no hay boot‑args (claves `WiiSMP` en el plist); recuento en espacio de usuario.
-> - **Parte 38** — PIR, espacio de usuario, **orden exacto para despertar el núcleo 1** y **plan (38.4)**.
-> - Si algo se contradice, vale la parte **más reciente** (38 > 37 > 36 > …).
+> - **Parte 38** — PIR, espacio de usuario, orden para despertar el núcleo 1 y plan (38.4).
+> - **Parte 39** — `WAKE(1)` → excepción 0x1700 en el núcleo 0.
+> - **Parte 40** — **0x1700 es la IPI de Espresso** (NetBSD `EXC_IPI`): redirigir el vector de XNU con 1 instrucción; `sync_cache64` para memoria baja; **orden actualizado (40.4)**.
+> - Si algo se contradice, vale la parte **más reciente** (40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -55,14 +57,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 38.4** (recuperación por SD → núcleo 1 según 38.3 → estrés).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 40.4** (redirigir 0x1700 → reintentar el núcleo 1).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -2776,3 +2778,80 @@ Criterio de éxito del paso 3: arranque normal, `hw.ncpu = 1`, WindowServer por 
 | 6 | Estrés: `OSAtomicIncrement32`/`CompareAndSwap32`/`pthread_mutex` (por la commpage) + uso normal con audio | medio |
 | 7 | Filtro `lwarx…stwcx.` (38.2) y parche en disco por prioridad | medio |
 | 8 | L2 en el núcleo 1; núcleo 2 (`WAKE(2) = 1<<21`, IPI bit 18, `INTMSK(2) = 1<<22`) | alto |
+
+---
+
+# PARTE 39 — Paso 5b: `WAKE(1)` provoca una excepción 0x1700 en el núcleo 0 (2026-09-27), resumen
+- Implementado (commit f6688c8 del fork del Mac, `WiiSMPCPUs = 2`):
+  - `WiiPE`: parche del kernel, PIRE, CAR/BCR, nodo `@1`.
+  - Subclase `WiiCPUInterruptController`, que puede dar por "habilitado" un secundario que falle.
+  - `startCPU`: commpage MP parcheada (stubs en +0x1700, después de `_COMM_PAGE_END`); trampolín por un mapeo sin caché (HID5/HID4 del núcleo 0, HID0 sin ICE/DCE, HID2 `0x000F0000`, L2CR 0, marca `"bsS1"` en `0x08100000`, SRR0 0x100, SRR1 0); `INTMSK(1) = 0`; `SCR |= 1<<22` con EE = 0; espera de 200 ms a la marca.
+- **Intento 1:** panic por `dcbf` en `0xE0` (la página 0 no está mapeada en el kernel). Se quitaron los `dcbf`.
+- **Intento 2:** **`Unresolved kernel trap(cpu 0): 0x1700 - Thermal`** justo después del `mtspr SCR` con `WAKE` (PC en el sondeo del log por IPC, MSR `0x9030` con EE = 1). No se llegó a comprobar la marca del trampolín. La SD ha vuelto al mkext de 1 CPU.
+
+---
+
+# PARTE 40 — La excepción 0x1700 **es la IPI de Espresso**
+
+## 40.1 Qué es 0x1700 en Espresso
+**NetBSD, `sys/arch/powerpc/include/trap.h`:**
+```c
+/* The following are only available on 750/7400: */
+#define EXC_THRM   0x1700   /* Thermal Management Interrupt */
+/* The following are only available on IBM Espresso: */
+#define EXC_IPI    0x1700   /* Inter-processor Interrupt */
+```
+**NetBSD, `sys/arch/evbppc/nintendo/machdep.c` (`cpu_startup`):**
+```c
+oea_install_extint(pic_ext_intr);                 /* vector 0x500 */
+#ifdef MULTIPROCESSOR
+if (wiiu_native) {
+    ipi_latte_init();
+    oea_install_extint_vec(pic_ext_intr, EXC_IPI); /* ¡el mismo manejador en 0x1700! */
+}
+#endif
+```
+⇒ En Espresso, las ICI **no llegan por 0x500 (excepción externa) sino por el vector 0x1700**, que en el 750 era el del *Thermal Assist*. NetBSD instala en 0x1700 el mismo código que en 0x500. Su `pi_get_irq` mira primero `SCR & IPI_PEND(cpu)`, reconoce la IPI y la despacha. Esto explica también por qué `INTSR` no reaccionó en A': la IPI no pasa por la causa del PI.
+
+XNU no lo sabe: su vector 0x1700 (`lowmem_vectors.s` l.599) es:
+```
+. = 0x1700
+mtsprg 2,r13 ; mtsprg 3,r11 ; li r11,T_THERMAL ; b .L_exception_entry
+```
+y `T_THERMAL` acaba en `Unresolved kernel trap`, que es lo que viste.
+
+**Por qué llegó una IPI al núcleo 0 justo con el `WAKE`** [NO VERIFICADO]: o el despertar genera una ICI hacia el núcleo que despierta (un "ack"), o quedó puesto `IPI_PEND(0)` (bit 20) por el arranque de Nintendo/loader. En cualquier caso, **el núcleo 0 debe aceptar ICI por 0x1700 antes del `WAKE`**, y tolerar una ICI sin bit pendiente (espuria): registrarla y volver.
+
+## 40.2 Solución: redirigir 0x1700 a la ruta de interrupción externa de XNU (1 instrucción)
+El vector 0x500 de XNU (`lowmem_vectors.s` l.267) es:
+```
+. = 0x500
+mtsprg 2,r13 ; mtsprg 3,r11 ; li r11,T_INTERRUPT ; b .L_exception_entry
+```
+Tienen la **misma forma**: basta cambiar la **3ª instrucción del vector 0x1700** (física `0x1708`) por la del 0x500 (física `0x508`), es decir, `li r11,T_THERMAL` → `li r11,T_INTERRUPT`. Así XNU trata la ICI como una interrupción externa: `interrupt()` → manejador de la CPU → `IOCPUInterruptController::handleInterrupt(source = núcleo)`:
+- núcleo 0 → vector 0 → `WiiInterruptController::handleInterrupt` (que ya mira `SCR` bit 20 antes del PI);
+- núcleo 1 → vector 1 → tu manejador de IPI (`SCR` bit 19).
+
+Es lo mismo que hace NetBSD, pero sin copiar código.
+
+**Cómo aplicarlo** (en `WiiPE::start`, solo con `WiiSMP`, antes de crear el nodo `@1`):
+1. Leer las palabras físicas `0x1700..0x170C` y `0x500..0x50C` con `ml_phys_read`. **Comprobar** que `0x1700/0x1704` son `mtsprg 2,r13 / mtsprg 3,r11`, que `0x1708` es `li r11,<T_THERMAL>` y que `0x508` es `li r11,<T_INTERRUPT>` (misma codificación salvo el inmediato). Si no, abortar SMP.
+2. `ml_phys_write(0x1708, palabra_de_0x508)`.
+3. **Sincronizar cachés por dirección física:** `sync_cache64(0x1700, 16)` (xnu `osfmk/ppc/cache.s` l.175–194, trabaja con la traducción de datos desactivada). Es la solución al panic del intento 1: la página 0 no tiene VA en el kernel, así que nada de `dcbf/icbi` por VA sobre memoria baja.
+4. Aplicar lo mismo si en algún momento hace falta vaciar el `ResetHandler` (física `0xE0`): `sync_cache64(0xE0, 16)`. Probablemente no hace falta: `cpu_start` lo escribe con `ml_phys_write`, que ya es coherente para la D‑cache, y el secundario lo lee con las cachés apagadas (tu HID0 sin ICE/DCE) desde memoria. Con `DCE = 0` en el secundario, la línea podría seguir **sucia en la D‑cache del núcleo 0** → **sí, hacer `sync_cache64(0xE0, 16)` en `startCPU` justo antes del `WAKE`** (y lo mismo para `PerProcTable[1]` y la pila/`per_proc` que lea el secundario al principio, si los lee con la caché apagada).
+
+**Manejo en el núcleo 0 (y 1):**
+- En el manejador: si `SCR & IPI_PEND(yo)` → borrar en bucle y llamar `ipi_handler()`. **Si no hay bit pendiente**: contarla como espuria, registrarla (limitado) y volver.
+- **Riesgo de tormenta:** si la ICI fuera de nivel y su causa no se pudiera borrar, entraría en bucle. Primera prueba: registrar `SCR` y el número de ICI espurias en los primeros ms tras el `WAKE`.
+- ¿Afecta `MSR[EE]` a 0x1700? NetBSD lo trata como una interrupción externa (con EE). Tu panic ocurrió con EE = 1. Supón que EE la enmascara; hacer el `WAKE` con EE = 0 y activar EE después de tener el vector redirigido.
+
+## 40.3 THRM y la rutina de Nintendo
+- **No toques THRM1–3 ni TIE:** en Espresso el *Thermal Assist* del 750 no se usa como tal, y Nintendo **reutiliza THRM3 como registro de puntero** (su `mfspr r4,thrm3` para la estructura "bs0x"). El vector 0x1700 es la IPI; desactivar "thermal" no tiene sentido.
+- **`bl 0x240 … 0x314` de Nintendo antes de despertar:** conviene verlos, porque pueden contener la inicialización/invalidación de L1/L2 y la puesta de ICE/DCE que tu trampolín omite. **Pásamelos** (el desensamblado de `0x08000240–0x08000330` o toda la rutina desde `mem0.dis`, solo instrucciones) y los traduzco a un trampolín completo. Mientras tanto, el trampolín actual (cachés apagadas) es aceptable para llegar a XNU: `_start_cpu`/`init750` configura HID0 y cachés por su cuenta.
+
+## 40.4 Orden actualizado para el siguiente intento
+1. `WiiPE::start`: …lo de antes… + **redirección 0x1708** (40.2) con comprobación de las 4 palabras.
+2. `WiiInterruptController`: manejo de ICI por `SCR` **tolerante a espurias** en el núcleo 0; `INTMSK(0) |= 1<<20` como NetBSD (inocuo).
+3. `startCPU(1)`: commpage, trampolín, `sync_cache64` de `0xE0` (`ResetHandler`) y de los datos por núcleo que lea el secundario, `INTMSK(1) = 0`, `WAKE` con EE = 0, y reactivar EE. Esperar la marca 200 ms **registrando `SCR` y el número de ICI recibidas**.
+4. Núcleo 1: vector 1 con el manejador de IPI y, después, `INTMSK(1) = 1<<21`.
+- Si vuelve a colgarse: foto. Si el panic ya no es 0x1700, anotar el nuevo vector/PC.
