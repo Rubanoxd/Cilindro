@@ -53,7 +53,8 @@
 > - **Partes 59–60** — ¡escritorio con `hw.ncpu 2`! Pero el núcleo 1 está **muerto en un panic silencioso** (muy probablemente `panic("thread_terminate")`: `ast_taken` no vio AST_APC). Por eso el sistema funciona como UP y arranca; en smp33, con el núcleo 1 vivo, se colgaba OHCI. Cómo confirmarlo por SSH (60.3).
 > - **Partes 61–62** — el panic del núcleo 1 lo causaba el ping (la Parte 60 queda descartada). Con el núcleo 1 vivo, PI y Latte mask0 = 0: **no es un enrutado al núcleo 1**, es que el arranque se para **antes** de que ningún driver habilite interrupciones. Además, el filtro `Busy|Pass` puede **perder IPI reales** (62.2). Balizas de progreso de drivers (62.4).
 > - **Partes 63–64** — congelación temprana intermitente tras el WAKE. El filtro por Busy no puede bloquear. Hay que ver el camino sin depender de hilos: **balizas que pintan directamente en el framebuffer** (64.2). Quitar escrituras de SCR sin lock y el bucle de ack sin límite (64.3).
-> - Si algo se contradice, vale la parte **más reciente** (64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 65–66** — sin congelaciones (SCR con lock). Los dos núcleos ociosos; OHCI0 **nunca llegó a `_interruptEventSource->enable()`**: `WiiOHCI::UIMInitialize` está dormido entre `addEventSource` y `enable()` (dos `IOSleep(100)` en medio). Cómo verlo: el `wait_event` del hilo (66.2).
+> - Si algo se contradice, vale la parte **más reciente** (66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -70,14 +71,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 64.5** (balizas que pintan en el FB; SCR solo con lock y ack acotado; sin ping; luego 62.4).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 66.5** (pasos de UIMInitialize + wait_event del hilo + temporizadores por núcleo).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -3827,3 +3828,78 @@ Desde tu kext (o uno de prueba cargado por SSH), vuelca con `IOLog` y mira en `s
 2. 64.3: ack acotado, todas las escrituras de SCR con lock y sin la escritura de respaldo, RMW dentro del lock, sin ping.
 3. Arrancar varias veces (3-4). Si hay congelación, el último bloque de cada núcleo dice dónde.
 4. Si arranca de forma estable: seguir con 62.4 (balizas de `start()` de drivers) y la prueba de paralelismo (dos bucles `sh`).
+
+
+---
+
+# PARTE 65 — (informe del Mac) smp37/38: sin congelaciones; OHCI0 nunca habilita su interrupción
+
+- smp37 = 64.3 (todo SCR por `wiiSCRModify` con lock, RMW dentro, `sync`, filtro Busy, sin ping): **sin congelaciones**.
+- smp38: + gancho en `_rtclock_intr` que repinta cada 16 ticks.
+  - Los ticks de **los dos** núcleos alternan; latido vivo; sin panic.
+  - `processor[1]` IDLE (`idle_count` = 1); último punto de los dos núcleos = `idle_thread`.
+  - `MPsigpStat` normal (núcleo 0 = 1, núcleo 1 = 0).
+  - PI mask0 `0x01000050` normal; **Latte mask0 `0x80`: falta el 5**.
+  - **Latte `vectors[5]`: Soft = 1, Hard = 1, Active = 0. IES de OHCI0: prod = cons = 0**, autoDisable = 1, explicitDisable = 0.
+
+---
+
+# PARTE 66 — Respuesta: `UIMInitialize` de OHCI está dormido antes de `enable()`
+
+## 66.1 Qué dicen los datos (pregunta 3 primero)
+- `IOInterruptController::registerInterrupt` deja **todos** los vectores recién registrados con `interruptDisabledHard = 1` **y** `interruptDisabledSoft = 1`. Es el estado inicial. Así que Hard=1 **no** implica que llegara una interrupción.
+- `IOInterruptController::enableInterrupt` (`IOInterruptController.cpp:282-299`) **pone primero `Soft = 0`** sin condiciones, y solo después mira Hard y llama a `enableVector`.
+- **Soft = 1 ⇒ `enableInterrupt` no se ha llamado nunca** para ese vector. No es tu `enableVector`, ni el maskLock, ni la sombra: el camino ni siquiera ha empezado. Con prod = cons = 0, la IES tampoco ha visto ninguna interrupción.
+- En `WiiOHCI::UIMInitialize` (osx-drivers `WiiUSB/src/OHCI/WiiOHCI.cpp:76-380`), entre `_workLoop->addEventSource(_interruptEventSource)` (l.166) y `_interruptEventSource->enable()` (l.374) están:
+  - la reserva de HCCA y bounce buffers (IOBufferMemoryDescriptor contiguos) y `bzero`;
+  - el reset `while (CmdStatus & HCR) IODelay(1)` (**sin límite**, l.234-236);
+  - dos `IOWorkLoop::workLoop()` + `IOTimerEventSource` para iso;
+  - **dos `IOSleep(100)`** (l.350 y l.359).
+- Los dos núcleos están ociosos, así que el hilo que ejecuta `UIMInitialize` **está dormido**, no girando. Descarta el bucle de `IODelay`: un hilo girando haría que su núcleo estuviera RUNNING, no IDLE. Queda: `IOSleep` que no despierta, o una espera dentro de una reserva de memoria o de la creación del workloop.
+
+## 66.2 Pregunta 1: qué hilo duerme y en qué evento
+**Paso 1 — dónde se ha parado `UIMInitialize`.** Es código tuyo, así que pon balizas C (números de paso en lowGlo, con `current_thread()` en la primera):
+1. entrada;
+2. tras `addEventSource`;
+3. tras la reserva de HCCA y buffers;
+4. tras el reset HCR;
+5. tras crear los workloops iso;
+6. antes y 7. después del primer `IOSleep(100)`;
+8. antes y 9. después del segundo;
+10. tras `enable()`.
+
+**Paso 2 — en qué evento duerme ese hilo.** Con el puntero del hilo guardado en el paso 1, lee:
+- `thread->wait_event`. Saca el offset de `otool -tv` de `_wait_queue_assert_wait64_locked`: el `stw rX,N(rThread)` que guarda el evento.
+- `thread->state` (TH_WAIT = 0x01, TH_UNINT = 0x08…).
+- `thread->last_processor`.
+- Interpretación:
+  - **`wait_event == &_clock_delay_until`** (búscalo con `nm mach_kernel`) ⇒ está en `IOSleep` (`IOSleep` → `delay_for_interval` → `clock_delay_until` → `assert_wait_deadline((event_t)clock_delay_until, …)`, `kern/clock.c:896-912`). Es decir, **el temporizador no lo despertó** → 66.3.
+  - Otra dirección ⇒ resuélvela con `nm` (lock de VM, `vm_page_wait`, un mutex de IOKit…).
+
+## 66.3 Pregunta 2: caminos de wakeup perdido con dos CPU en xnu-792
+Los temporizadores son **por procesador**. Hay dos candidatos concretos:
+1. **Colas de `timer_call` por procesador.** `timer_call_enter` mete el temporizador en `PROCESSOR_DATA(current_processor(), timer_call_queue)` y programa el reloj **de ese núcleo** (`kern/timer_call.c:126-156` → `clock_set_timer_deadline`). **Solo el decrementador de ese núcleo lo procesa** (`rtclock_intr` → `timer_call_interrupt` sobre la cola de `current_processor()`, `timer_call.c:274-282`).
+   - Si el hilo hizo `IOSleep` en el núcleo 1, su temporizador vive en la cola del **núcleo 1**, y solo lo dispara el decrementador del núcleo 1 cuando `pp->rtclock_timer.deadline <= ahora` (`ppc/rtclock.c:928-957`).
+2. **El estado del reloj es por per_proc** (`pp->rtclock_timer.{deadline,has_expired}`, `pp->rtclock_tick_deadline`, `pp->rtcPop`). En el núcleo 1 se inicializa en `clock_init` → `sysclk_init` (`rtclock.c:226-240`). Todo depende de que `mach_absolute_time()` (TB) avance igual en los dos núcleos (comprobado: TB compartido) y de que el decrementador del núcleo 1 se reprograme en cada tick.
+   - Tu gancho en `_rtclock_intr` **toca esa función**. Comprueba que el stub **preserva r3 (`ssp`)**, que `rtclock_intr` usa para `hertz_tick(USER_MODE(ssp->save_srr1), ssp->save_srr0)`, y todos los registros no volátiles. Un stub que dañe r3 o r31 puede romper la gestión de temporizadores sin colgar el sistema.
+
+**Qué leer para confirmarlo** (si 66.2 da `clock_delay_until`):
+- En los dos per_proc: `rtclock_timer.deadline`, `has_expired`, `rtclock_tick_deadline` y `rtcPop`. Saca los offsets de `otool -tv` de `_clock_set_timer_deadline` (`stw` de `deadline` y de `rtcPop`) y de `_rtclock_intr`. Compáralos con `mach_absolute_time()` actual.
+- `processor[x]` → `processor_data.timer_call_queue` (cabeza de cola) del núcleo en `last_processor` del hilo: ¿está el `wait_timer` del hilo encolado? ¿con qué `deadline`?
+- Casos:
+  - deadline del temporizador en el pasado pero `rtclock_timer.deadline` de ese núcleo = EndOfAllTime o futuro ⇒ **no se reprogramó el reloj** tras encolarlo (mira `has_expired` atascado a TRUE);
+  - `rtclock_timer.deadline` en el pasado y decrementador tictaqueando ⇒ **`rtclock_intr` no llama al expire**: tu gancho o `rtclock_timer_expire` NULL en ese núcleo.
+
+**Otros wakeups entre núcleos** (menos probables, pero da igual con 66.2): `vm_page_wait` (VM), mutex de IOKit/`IOLockSleep`, y `thread_call` (IOTimerEventSource usa `thread_call`, que tiene su propio `timer_call` global que se re-arma en el núcleo que lo toque).
+
+## 66.4 Prueba rápida de descarte
+- **Sustituye temporalmente los dos `IOSleep(100)` de `UIMInitialize` por `IODelay(100000)`** (espera activa, sin temporizador).
+  - Si **arranca**, el problema es el temporizador por núcleo (66.3) y OHCI solo era el primero en tropezar.
+  - Si no, el paso 1 de 66.2 dirá dónde se para.
+- Quita también el gancho de `_rtclock_intr` en esa prueba, o verifica el stub (66.3), para no mezclar causas.
+
+## 66.5 Orden
+1. Balizas de pasos en `UIMInitialize` + `current_thread()` (66.2 paso 1).
+2. `wait_event`/`state`/`last_processor` de ese hilo (66.2 paso 2).
+3. Si es `clock_delay_until`: estado de los relojes por per_proc y de la cola de `timer_call` (66.3). En paralelo, la prueba `IODelay` (66.4).
+4. Arreglado esto, prueba de paralelismo (dos bucles `sh`) y 62.4 para el resto de drivers.
