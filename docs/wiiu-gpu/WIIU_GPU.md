@@ -48,7 +48,8 @@
 > - **Partes 49–50** — sin doze el workloop sigue atascado ⇒ el núcleo 1 **no está en su bucle ocioso**. No-determinación: **carrera de wakeup perdido** en `IOCPUInterruptController::registerInterrupt` + `enabledCPUs++` (50.2). Diagnóstico con los contadores del per_proc 1 independiente de processor_start.
 > - **Partes 51–52** — IOCPU arreglado; los dos núcleos viven; solo queda Latte 5 (probablemente **OHCI0**, USB) soft-disabled. xnu no necesita IPI para recoger el hilo ⇒ el workloop está **bloqueado**, no pendiente. Diagnóstico decisivo en 52.3.
 > - **Partes 53–54** — sin WiiUSB/IPC sigue igual. El bucle ocioso **no necesita IPI**; que el núcleo 1 reciba solo ~3 externas indica que **no está ocioso** (ocupado en un hilo o con la expulsión desactivada). Offsets de hwCtr/SIGP y de `struct processor` para verlo sin código nuevo (54.2). Plan B: arrancar el núcleo 1 **después** del escritorio (54.5).
-> - Si algo se contradice, vale la parte **más reciente** (54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 55–56** — el núcleo 1 se queda en su **hilo de arranque después de SignalReady** (antes del primer cambio de contexto) y el núcleo 0 se congela a la vez **sin panic visible**. Muy probable: un panic/timeout de lock cuyo camino (`Debugger` → `cpu_signal(SIGPdebug)` → tu `signalCPU`) se bloquea. Balizas exactas y gancho en `_panic` (56.4).
+> - Si algo se contradice, vale la parte **más reciente** (56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -65,14 +66,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 54.6** (leer processor[1] + contadores SIGP; si hace falta, arranque tardío del núcleo 1).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 56.6** (gancho en `_panic` + balizas por núcleo en el camino post-SignalReady + signalCPU acotado).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -3442,3 +3443,87 @@ Tu idea de contar envíos y recepciones es buena. Píntalos en **decimal**, no e
 1. Añadir al hilo de diagnóstico, **sin código nuevo en XNU**: `processor[1]` (+0x08/+0x0C/+0x10/+0x14/+0x1C), hwContextSwitchs de los dos núcleos y los contadores SIGP de 54.2 (recibidos en el 1; timo/merged en el 0). Una captura con dos lecturas separadas 2 s basta.
 2. Si `active_thread` del núcleo 1 está fijo: el ping de 54.3 para su PC, y compararlo con el workThread/gate de OHCI y PI.
 3. En paralelo, preparar el **arranque tardío** (54.5) como vía para llegar al escritorio y medir.
+
+
+---
+
+# PARTE 55 — (informe del Mac) El núcleo 1 se queda en su primer hilo y todo se congela en <1 s
+
+- smp29 (solo diagnóstico): el hilo de diagnóstico **solo pinta su primera vuelta**. El sistema se congela en <1 s tras `processor_start(1)`, que **sí** vuelve (pasos 14/15 ✓).
+  - processor[1]: state = 1 (RUNNING), next_thread = 0, current_pri = 81.
+  - active_thread = 0x02AE1740; idle_thread = 0x02AE1400 (0x340 antes).
+  - hwContextSwitchs: núcleo 1 = **1**, núcleo 0 = 82.
+  - Núcleo 1: hwExternals = hwDecrementers = numSIGPwake = hwSIGPs = 0.
+  - Núcleo 0: numSIGPtimo = numSIGPmwake = 0.
+- smp30 = smp29 + `cpu_sync_timebase` → `blr`: **idéntico**.
+- `cpu_machine_init` (0x93098), en el secundario:
+  1. lock `rht_lock` (0x3912C0) + espera;
+  2. `PE_cpu_machine_init`;
+  3. si per_proc+0x1B4 ≠ 0, tres `mttb`;
+  4. espera de `SignalReady` del maestro;
+  5. `cpu_sync_timebase` y `ml_init_interrupt`; pone BootDone|SignalReady;
+  6. lock 0x3912CC + `thread_wakeup`.
+
+---
+
+# PARTE 56 — Respuesta: el núcleo 1 muere entre SignalReady y su primer cambio de contexto; el núcleo 0 muere en el camino del panic
+
+## 56.1 Qué hilo es y dónde está (pregunta 1)
+- **Sí, es el hilo de arranque.** `processor_start` (`kern/processor.c:500-536`) crea primero el `idle_thread` (`idle_thread_create`) y justo después el hilo dedicado `processor_start_thread` (`kernel_thread_create`). Salen seguidos de la zona de hilos (0x340 = tamaño de `struct thread`).
+  - `slave_main` → `load_context` lo pone en marcha: ese es el **único** cambio de contexto (hwContextSwitchs = 1).
+  - Corre entero a `splsched` (EE=0), así que hwDecrementers = 0 y hwExternals = 0 son **normales** aquí. No indican por sí solos un lock.
+- **Ya pasó `SignalReady`:** `processor_start(1)` solo vuelve cuando el maestro, en `cpu_start` (`ppc/cpu.c:363-371`), ve `SignalReady` del núcleo 1. Así que los pasos 1-5 de tu lista **están hechos**. Ni el lock 0x3912C0 (`rht_lock`) ni la espera de SignalReady del maestro son el sitio.
+- Lo que le queda al núcleo 1 hasta su **segundo** cambio de contexto (xnu-792):
+  1. `cpu_machine_init` (fin): `hw_atomic_and(ppXFlags)`, `thread_wakeup(&cpu_flags)` → despierta al hilo del maestro que espera en `cpu_start`: **`thread_setrun` desde el núcleo 1**. Después `simple_unlock(SignalReadyLock)` y `pmsPark()`.
+  2. `slave_machine_init` → `clock_init()` → `sysclk_init` → `setTimerReq()` (programa el DEC; inocuo).
+  3. `processor_start_thread` → `thread_terminate(self)` (`kern/thread_act.c:119-143`): `thread_terminate_internal` (mutex del hilo), `ml_set_interrupts_enabled(FALSE)`, `ast_taken(AST_APC)` → `thread_terminate_self` → `thread_block` → `thread_select`/`thread_dispatch` (lock `pset->sched_lock`, cola del reaper con `thread_wakeup`) → cambio a `idle_thread` (sería hwContextSwitchs = 2).
+- En 1 y 3 el núcleo 1 despierta hilos. `thread_setrun` elige un procesador. Si el hilo va al núcleo 0 (que está ejecutando), llama a `cause_ast_check(0)` → `cpu_signal(0, SIGPast)` → **`PE_cpu_signal` → tu `WiiCPU::signalCPU` ejecutado por primera vez desde el núcleo 1**. Con `cpu_sync_timebase` anulado, es la primera vez que el núcleo 1 escribe SCR para señalizar.
+
+## 56.2 Por qué se congela también el núcleo 0 sin ver un panic
+- Los spinlocks de XNU/IOKit (`simple_lock`, `IOSimpleLockLock` = `lck_spin_lock` = `ppc_usimple_lock`, `osfmk/ppc/hw_lock.s:1712-1797`) **sí tienen timeout**: tras `LockTimeOut` hacen `panic("simple lock (0x%08X) deadlock detection, pc=0x%08X")`. Así que un núcleo atascado en un spinlock **no gira para siempre**: provoca un panic.
+- Pero el panic, con 2 CPU, hace esto (`ppc/model_dep.c:590-614`): `lock_debugger()` → para cada otra CPU `cpu_signal(tcpu, SIGPdebug)` → **tu `signalCPU`** → `hw_cpu_sync(&debugger_sync, LockTimeOut)` → solo **después** `draw_panic_dialog()`.
+  - Si `signalCPU` se bloquea (su IOSimpleLock lo tiene el otro núcleo, que está muerto, o lo tiene **el mismo núcleo**: panic desde dentro de `signalCPU` o del ack con el lock cogido → recursión), el panic **nunca llega a pintarse**.
+  - Además, el panic anidado del lock recursivo intenta lo mismo → "nested panic" → cuelgue.
+  - Resultado: los dos núcleos con EE=0 y **pantalla congelada sin diálogo de panic**. Es exactamente lo que ves.
+- Así que lo más probable es: **algo falla en el núcleo 1 en 56.1 (un panic, un trap o un lock), y el camino del panic se queda atascado en tu `signalCPU`**. O bien el núcleo 1 se atasca *dentro* de `signalCPU` con el lock cogido, y el núcleo 0, al señalizar, cae en el timeout → panic → `signalCPU` → mismo lock → cuelgue.
+
+## 56.3 per_proc+0x1B4 (pregunta 2)
+- Es `per_proc->hibernate` (`ppc/cpu.c:158-175`). Solo es ≠ 0 al volver de **hibernación** (`hibernate_machine_init`). Con `hibernatemode 0` (lo tienes así por los stubs de `__HIB`) vale siempre 0. **No hace falta anularlo**; si quieres ser completo, pon esos tres `mttb` a nop igual que los otros.
+
+## 56.4 Diagnóstico (pregunta 3): balizas **por núcleo** + gancho en `_panic` + `signalCPU` a prueba de panics
+Tus balizas en lowGlo sirven. Hazlas por núcleo: el stub hace `mfsprg r11,0` y compara con la dirección del per_proc de la CPU 0 (o lee `cpu_number` del per_proc), y escribe en `0x5F00 + 0x40*cpu + 4*n`. Así el núcleo 0 y el 1 dejan cada uno su **último punto alcanzado**.
+
+**A. Puntos (núcleo 1 y núcleo 0), por orden de 56.1:**
+1. Tras `bl _PE_cpu_machine_init` en `cpu_machine_init`.
+2. Justo antes de `ori …,SignalReady` / `sth …,cpu_flags` (0x2).
+3. `_thread_wakeup_prim` (entrada).
+4. `_thread_setrun` (entrada) y `_cause_ast_check` (entrada).
+5. `_cpu_signal` (entrada) y **tu `signalCPU`**: entrada, tras coger el lock, tras `mtspr SCR` y salida (en C, sin stub).
+6. `_clock_init` (entrada).
+7. `_thread_terminate` (entrada), `_ast_taken` (entrada), `_thread_terminate_self` (entrada).
+8. `_thread_block_reason` (entrada), `_thread_select` (entrada), `_thread_dispatch` (entrada) y `_idle_thread` (entrada).
+9. **`_panic` (entrada)**, **`_Debugger` (entrada)** y `_unresolved_kernel_trap` si existe el símbolo; si no, `_trap` (entrada).
+
+**B. Gancho en `_panic` que se vea aunque todo se congele:**
+- Primera instrucción de `_panic` → `b stub`.
+- El stub guarda r3 (formato), r4, r5 y LR en lowGlo (por núcleo), pinta un cuadro rojo directamente en el framebuffer físico (el trampolín ya sabe hacerlo en modo real; en virtual usa tu mapeo del FB desde C), ejecuta la instrucción desplazada y vuelve a `_panic+4`.
+- Mejor aún, desde el stub llama a una función C de tu kext (`WiiDiagPanicHook(r3,r4,r5,lr)`) que pinte esos 4 valores en filas. Esa función no debe usar locks ni IOLog.
+- Con r3 (cadena) sabrás el tipo de panic; con r4/r5 la dirección del lock y el PC ("simple lock deadlock", "Unresolved kernel trap", etc.).
+
+**C. Que `signalCPU` no pueda bloquear el camino del panic:**
+- Sustituye `IOSimpleLockLock` por un **try-lock acotado** (p. ej. 10.000 intentos con `IOSimpleLockTryLock`). Si no lo consigue, haz la `mtspr` igualmente: el `|=` de un solo bit es idempotente y, como mucho, se pierde la carrera de otro bit.
+- Guarda el **dueño** (número de CPU). Si el dueño es la propia CPU (recursión desde un panic), **no** esperes.
+- Así `Debugger` completa su `hw_cpu_sync` (con timeout) y **aparece el diálogo de panic**. Aunque no hay `-v`, tus balizas y el gancho B dirán el resto.
+
+**D. `_isBootCPU` y `initCPU`:** confirma que en el núcleo 1 no se ejecuta **nada** que haga IOLog, IPC ni `IOLockLock` (mutex). `initCPU` corre en el paso 2 de `cpu_machine_init`, con EE=0 y antes del primer cambio de contexto.
+
+## 56.5 ¿Plan B ya? (pregunta 4)
+- De acuerdo contigo: el arranque tardío **no evita** este fallo, porque el primer hilo del núcleo 1 recorre el mismo camino. Solo lo retrasaría.
+- Úsalo después, cuando el núcleo 1 llegue a `idle_thread`, para aislar problemas de drivers.
+- **Antes, arreglar esto.** Con 56.4 deberías ver en un solo arranque: último punto de cada núcleo + panic (si lo hay) con su cadena y PC.
+
+## 56.6 Orden
+1. `signalCPU` con try-lock acotado y detección de recursión (56.4.C). Es barato y probablemente convierte el cuelgue en un panic visible.
+2. Gancho en `_panic` (56.4.B).
+3. Balizas por núcleo en los puntos 56.4.A.
+4. Arrancar (mantén `cpu_sync_timebase` → `blr`: el TB es compartido y así quitas un handshake). Con el último punto de cada núcleo y el panic, arreglar el fallo concreto.
