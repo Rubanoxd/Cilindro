@@ -49,7 +49,8 @@
 > - **Partes 51–52** — IOCPU arreglado; los dos núcleos viven; solo queda Latte 5 (probablemente **OHCI0**, USB) soft-disabled. xnu no necesita IPI para recoger el hilo ⇒ el workloop está **bloqueado**, no pendiente. Diagnóstico decisivo en 52.3.
 > - **Partes 53–54** — sin WiiUSB/IPC sigue igual. El bucle ocioso **no necesita IPI**; que el núcleo 1 reciba solo ~3 externas indica que **no está ocioso** (ocupado en un hilo o con la expulsión desactivada). Offsets de hwCtr/SIGP y de `struct processor` para verlo sin código nuevo (54.2). Plan B: arrancar el núcleo 1 **después** del escritorio (54.5).
 > - **Partes 55–56** — el núcleo 1 se queda en su **hilo de arranque después de SignalReady** (antes del primer cambio de contexto) y el núcleo 0 se congela a la vez **sin panic visible**. Muy probable: un panic/timeout de lock cuyo camino (`Debugger` → `cpu_signal(SIGPdebug)` → tu `signalCPU`) se bloquea. Balizas exactas y gancho en `_panic` (56.4).
-> - Si algo se contradice, vale la parte **más reciente** (56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 57–58** — con 56.6 el núcleo 1 ya llega a `idle_thread` sin congelación; vuelve a faltar Latte 5 (OHCI0). La baliza 13 **no prueba** que esté ocioso: `idle_thread` salta al hilo recogido **sin pasar por más balizas**. Si `processor[1]->active_thread ≠ idle_thread`, el núcleo 1 está **ejecutando sin fin la action de OHCI** (58.2). PC del núcleo 1 con un stub en `_interrupt` (58.3).
+> - Si algo se contradice, vale la parte **más reciente** (58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -66,14 +67,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 56.6** (gancho en `_panic` + balizas por núcleo en el camino post-SignalReady + signalCPU acotado).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 58.5** (processor[1] ahora + PC del núcleo 1 + estado del workloop de OHCI).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -3527,3 +3528,87 @@ Tus balizas en lowGlo sirven. Hazlas por núcleo: el stub hace `mfsprg r11,0` y 
 2. Gancho en `_panic` (56.4.B).
 3. Balizas por núcleo en los puntos 56.4.A.
 4. Arrancar (mantén `cpu_sync_timebase` → `blr`: el TB es compartido y así quitas un handshake). Con el último punto de cada núcleo y el panic, arreglar el fallo concreto.
+
+
+---
+
+# PARTE 57 — (informe del Mac) Con 56.6 el núcleo 1 llega a idle_thread; vuelve OHCI enmascarado
+
+- Cambios de 56.4 aplicados:
+  - `wiiSCRModify` con try-lock acotado + detección de recursión, EE=0;
+  - gancho `_panic` → `wiiPanicHook`;
+  - balizas por núcleo (0x5F00 + 0x80·cpu; "último" en +0x68).
+- smp31: el stub leía el per_proc por SPRG0 (**dirección física**) → DSI. Aun así **se vio el diálogo de panic** (56.4.C funciona). Corregido con `mfsprg r11,1; lwz r11,0x200(r11)`.
+- smp32: el núcleo 0 se colgaba en un `IOLog` tras el WAKE. Se han quitado los WIISYSLOG posteriores al WAKE.
+- **smp33**: sin congelación ni panic. Latido vivo; hwDecrementers del núcleo 1 sube.
+  - Balizas del núcleo 1: 0–13 (hasta `idle_thread`) y 20–23. Balizas del núcleo 0: 2, 3, 5, 7–13, 20–23; nunca `cause_ast_check` (4).
+  - Núcleo 1: hwExternals = 24 y hwContextSwitchs = 22, **fijos entre 180 s y 300 s**.
+  - PI mask normal; **Latte mask0 `0x80`: falta el 5 (OHCI0)**. Manzana, sin SSH.
+
+---
+
+# PARTE 58 — Respuesta: comprobar si el núcleo 1 está ocioso o ejecutando la action de OHCI
+
+## 58.1 Lo que dicen (y no dicen) las balizas
+- Las balizas marcan **"se alcanzó alguna vez"** y el "último" es el último **punto con baliza** que ejecutó ese núcleo.
+- `idle_thread` (xnu `kern/sched_prim.c:2563-2635`), cuando recoge un hilo, hace `thread_run(idle_thread, …, new_thread)` y **salta directamente** a ese hilo. No pasa por `thread_block`/`select`/`dispatch`, así que **no toca ninguna baliza más**. Por tanto, "último = 13" es compatible con dos situaciones muy distintas:
+  - (a) el núcleo 1 está en el bucle ocioso;
+  - (b) el núcleo 1 recogió un hilo en `idle_thread` y **lo está ejecutando desde entonces**.
+- hwContextSwitchs quieto + hwDecrementers subiendo encaja con (b): un hilo que no termina, con la expulsión activa pero **sin otro hilo ejecutable** en ese núcleo. La expulsión por quantum solo cambia de hilo si hay algo que poner; si no, no cuenta cambio de contexto.
+- Encaja además con el vector 5: si ese hilo es el **workloop de OHCI** dentro de `WiiOHCI::handleInterrupt` (su action), `checkForWork` nunca llega a `enable()` → Latte 5 queda soft-disabled y enmascarado para siempre (52.4.1/52.4.2).
+
+## 58.2 Pregunta 1: por qué el núcleo 0 no le da más hilos
+- `thread_setrun` (`sched_prim.c:1985-2030`) prueba primero el **último procesador** del hilo si está IDLE, y luego cualquier procesador de `pset->idle_queue`. Solo va a `cause_ast_check` cuando nadie está ocioso y hay que **expulsar** (prioridad mayor que `current_pri` de otro procesador). Así que no ver `cause_ast_check` en el núcleo 0 es normal.
+- Con el sistema casi parado (esperando al USB), los pocos hilos que despiertan tienen `last_processor = 0` y el núcleo 0 suele estar ocioso: **se quedan en el 0**. Que el núcleo 1 no reciba hilos no es un fallo en sí.
+- Si el núcleo 1 estuviera en el caso (b), está `PROCESSOR_RUNNING` y **fuera** de `idle_queue`. Solo recibiría algo por expulsión (`cause_ast_check`) si llega un hilo de mayor prioridad que su `current_pri`.
+- **Léelo ahora** (ya tenías estas filas en smp29; vuelve a pintarlas en smp33):
+  - `processor[1]` +0x08 `state`, +0x0C `active_thread`, +0x10 `next_thread`, +0x14 `idle_thread`, +0x1C `current_pri`.
+  - `pset = *(processor[1] + 0x18)`: `pset+0x00` = `idle_queue.next`, **`pset+0x08` = `idle_count`**, `pset+0x0C` = `active_queue.next` (`kern/processor.h:78-81`).
+| Lectura | Caso |
+|---|---|
+| `state=2 (IDLE)`, `active_thread == idle_thread`, `idle_count ≥ 1` | (a) ocioso de verdad: el problema está en que el workloop de OHCI **no es ejecutable** → 58.4 |
+| `state=1`, `active_thread ≠ idle_thread` **fijo**, `current_pri` ≈ 80-ish | (b) el núcleo 1 ejecuta un hilo sin fin → 58.3 para ver dónde |
+| `state=3`, `next_thread ≠ 0` fijo | el ocioso no recoge el hilo → coherencia en modo virtual (54.3) |
+
+## 58.3 PC del núcleo 1 (sirve para el caso b)
+- Stub en **`_interrupt`** (entrada; `ppc/interrupt.c:48`: `interrupt(int type, struct savearea *ssp, dsisr, dar)`): guarda **r4 (`ssp`)** en `gSSP[cpu]` (lowGlo por núcleo, igual que tus balizas), ejecuta la instrucción desplazada y vuelve.
+- En tu `handleInterrupt(source=1)` (el ping por SCR de 54.3), lee de `gSSP[1]` (`osfmk/ppc/savearea.h:95-150`):
+  - `save_srr0` = **ssp+0x184** (palabra baja de un `uint64_t` en +0x180): el PC interrumpido;
+  - `save_lr` = **ssp+0x19C**;
+  - `save_r3` = ssp+0x9C;
+  - `save_srr1` = ssp+0x18C (bit EE, PR).
+  Cópialos a globales y píntalos desde el hilo del núcleo 0.
+- Dos o tres pings bastan. Si el PC cae en `WiiOHCI` (mira la dirección de carga del kext con `kextstat` en un arranque UP, o `WiiOHCI::handleInterrupt` por símbolo), está ahí. Con el LR ves quién lo llamó.
+
+## 58.4 Estado del workloop de OHCI (pregunta 2) — sin offsets a mano
+Lo más seguro es **no** calcular offsets: compila accesores contra las cabeceras de Tiger (Kernel.framework) con subclases que solo añaden métodos **no virtuales**, y convierte el puntero:
+```cpp
+class DiagIES : public IOInterruptEventSource {
+public:
+  unsigned prod() { return producerCount; }
+  unsigned cons() { return consumerCount; }
+  bool     autoDis() { return autoDisable; }
+  bool     explDis() { return explicitDisable; }
+};
+class DiagWL : public IOWorkLoop {
+public:
+  void *gate()    { return gateLock; }        // IORecursiveLock*
+  void *thread()  { return (void*)workThread; }
+  bool  todo()    { return workToDo; }
+};
+// uso: ((DiagIES*)ohci->_interruptEventSource)->prod()
+```
+- `IORecursiveLock` (`iokit/Kernel/IOLocks.cpp:80`) = `{ lck_mtx_t *mutex; thread_t thread; UInt32 count; }` → dueño en **gate+0x4** y cuenta en **gate+0x8**.
+- `vectors[5]` desde tu `LatteInterruptController`: `interruptActive`, `interruptDisabledSoft`, `interruptDisabledHard` (bytes 0, 1, 2 del `IOInterruptVector`).
+- Interpretación (resumen de 52.3):
+  - `gate->thread == workThread == processor[1]->active_thread` → **la action de OHCI no vuelve** (caso b): arreglar WiiOHCI (52.4.1: el filtro en el núcleo 0 recorre la done queue y los TD mientras la action o la UIM los tocan en el núcleo 1; 52.4.2: bucle `while (!SOF)`).
+  - `gate->thread == X` distinto de `workThread` → otro hilo tiene el gate. Mira si X es el `active_thread` de algún núcleo y su PC (58.3).
+  - `prod > cons`, `gate->thread == 0`, `todo == 1` → el workloop no se planifica (improbable; mira `processor[*]`).
+
+## 58.5 Pregunta 3: ¿plan B ya?
+- Si 58.2/58.3 confirman que la action de OHCI no vuelve en el núcleo 1, el arranque tardío **también** fallaría en cuanto haya actividad USB concurrente. El problema es de WiiOHCI con dos núcleos, no del arranque.
+- Si el disco raíz no va por USB, el arranque tardío podría llegar al escritorio. Pero teclado, ratón o red por USB volverían a disparar el fallo.
+- **Orden recomendado:**
+  1. Una sola prueba con las filas de `processor[1]` + `idle_count` (58.2), el stub `_interrupt` + ping para el PC (58.3) y los accesores de 58.4.
+  2. Si es el caso (b) en WiiOHCI: arreglarlo (el filtro solo lee y reconoce el estado; todo el recorrido de TDs y listas se hace en la action, bajo el gate; o un spinlock común filtro/action/UIM). Después, SMP normal.
+  3. Plan B (54.5) solo si el diagnóstico apunta fuera de USB o para medir mientras se arregla OHCI.
