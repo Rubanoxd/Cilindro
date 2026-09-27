@@ -35,8 +35,10 @@
 > - **Parte 33** — `__HIB,__data` es la pila de interrupciones; hueco en la commpage.
 > - **Parte 34** — La commpage MP se elige al arrancar (`ml_get_max_cpus`) → SMP y parche en `WiiPE`/`WiiCPU` con `-wiismp`.
 > - **Parte 35** — ✅ Parche de `stwcx.` en caliente (142 sitios) probado en UP.
-> - **Parte 36** — Escaneo con símbolos en el arranque, qué entra en `-wiismp cpus=1`, kexts; **plan (36.4)**.
-> - Si algo se contradice, vale la parte **más reciente** (36 > 35 > 34 > …).
+> - **Parte 36** — Escaneo con símbolos en el arranque, qué entra en `-wiismp cpus=1`, kexts.
+> - **Parte 37** — ✅ Parche de `stwcx.` en el arranque (142); no hay boot‑args (claves `WiiSMP` en el plist); recuento en espacio de usuario.
+> - **Parte 38** — PIR, espacio de usuario, **orden exacto para despertar el núcleo 1** y **plan (38.4)**.
+> - Si algo se contradice, vale la parte **más reciente** (38 > 37 > 36 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -53,14 +55,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 36.4** (WiiPE con -wiismp cpus=1 → recuento en kexts → núcleo 1).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: tabla 38.4** (recuperación por SD → núcleo 1 según 38.3 → estrés).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -2693,3 +2695,84 @@ Criterio de éxito del paso 3: arranque normal, `hw.ncpu = 1`, WindowServer por 
 | 5 | `-wiismp cpus=2`: CAR/BCR, parche de la commpage (MP), kexts si hace falta, trampolín, IPIs, `WAKE(1)` | alto (foto; quitar el flag) |
 | 6 | Estrés de atómicos + uso normal | medio |
 | 7 | libSystem/CoreGraphics si hace falta; L2; núcleo 2 | alto |
+
+---
+
+# PARTE 37 — Plan 36.4: paso 3 OK y paso 4 (2026-09-27), resumen del Claude del Mac
+- **BootX en Wii U no pasa boot‑args** (el NVRAM de OpenBIOS arranca vacío; `com.apple.Boot.plist` no se lee). El SMP se activa con las claves **`WiiSMP` / `WiiSMPCPUs`** de la personalidad de WiiPE en el Info.plist del mkext (`-wiismp`/`-nowiismp` quedan por si acaso). El mkext se rehace con un script propio; el original está en BOOT como `.bak`.
+- **Parche en el arranque:** `142 stwcx. sites to patch, 23 in commpage templates` → `patched 142 … 0 mismatches` (igual que la tabla offline). Lleva las comprobaciones de `_version` 8.11.0 y del recuento 142 (`-wiismpforce` para saltárselas).
+- `HID5: 0x80000000 → 0xC0000000` (PIRE) sin problemas. **`mfspr 1007` antes de poner PIRE → excepción de programa (panic)**; se quitó la lectura.
+- `hw.ncpu 1`, GPU y uso normal; `make` 10,2 s → 9,9 s: el parche no tiene coste medible.
+- **Recuento fuera del kernel:**
+  - Kexts: solo ATIRadeon9700 (22 `stwcx.`), que no se carga en la Wii U. Los de Wiintosh/GX2, ninguno.
+  - Espacio de usuario: libSystem 5, CoreGraphics 20, CoreAudio 44, OSServices 37, Security 35, CoreMIDI 35, AudioToolbox 28, QuickTime 31, ColorSync 31, DesktopServicesPriv 32, OpenTransport 17, QuartzCore 12, HIToolbox 4, JavaScriptCore 111, DiskImages 171.
+  - Cifras dudosas (probablemente datos): Kerberos 728, URLAccess 1108, CALCore 939, libwx 395.
+
+---
+
+# PARTE 38 — Respuestas a la Parte 37 (paso 5, `cpus=2`)
+
+## 38.1 PIR (SPR 1007)
+- WiiUBrew lista **PIR = SPR 0x3EF (1007)** en Espresso (no el 1023 del 604/74xx). La rutina de Nintendo **lo escribe** (`mtspr 1007, n`) después de poner `HID5 = 0xC0000000` (PIRE). O sea: con PIRE, el PIR es un registro que **fija el software**, y sin PIRE su acceso provoca una excepción de programa (lo que viste).
+- **No hace falta para XNU:** cada núcleo sabe quién es por su `per_proc`, que XNU le pasa en `ResetHandler` (`cpu_start` → `&PerProcTable[cpu]`). El trampolín tampoco lo necesita si despiertas **los núcleos de uno en uno** (escribes el trampolín del núcleo 1, `WAKE(1)`, esperas a que XNU lo dé por arrancado y, más adelante, el del 2).
+- Si quieres dejarlo igual que Nintendo: en el trampolín, tras `HID5 = 0xC0000000`, `li r3,<n>; mtspr 1007,r3`. Para comprobar en caliente que ahora se puede leer (PIRE ya está puesto desde el arranque), un kext con `mfspr 1007` debería devolver 0 o lo que dejara el loader. Si hay excepción → panic → reiniciar; es opcional.
+
+## 38.2 Espacio de usuario: qué es imprescindible antes del núcleo 1
+- **Imprescindible:** el **parche de la commpage** (variantes MP). A través de ella pasan los spinlocks de pthread y los `OSAtomic*` de libSystem en 10.4 PPC (`_COMM_PAGE_COMPARE_AND_SWAP*`, `ATOMIC_ADD*`, `SPINLOCK_*`), que son lo más usado.
+- **Los `stwcx.` en línea de los frameworks:** no hay forma práctica de restringir los procesos de usuario a un núcleo en xnu‑792 (no existe afinidad para hilos de usuario; `thread_bind` solo es del kernel). Opciones:
+  1. **Aceptar el riesgo, medirlo (paso 6) y parchear después por prioridad** (paso 7). Recomendado.
+  2. Parchearlos en disco antes de arrancar con 2 núcleos (mucho trabajo por adelantado).
+- **Filtrar falsos positivos** antes de decidir: un sitio real es un `stwcx.` precedido, **pocas instrucciones antes (≤ 16) y en la misma función**, por un `lwarx` con el mismo `rA,rB`. Con ese filtro, los recuentos de Kerberos/URLAccess/CALCore/DiskImages bajarán a su valor real.
+- **Prioridad de parcheo en disco** (según uso con 2 hilos concurrentes en núcleos distintos):
+  1. libSystem (5) y CoreGraphics (20), por el WindowServer;
+  2. CoreAudio (44), AudioToolbox (28) y QuartzCore (12), porque el audio tiene hilos de E/S en paralelo;
+  3. HIToolbox (4), OSServices (37) y Security (35);
+  4. lo demás, si la prueba de estrés o el uso muestran fallos.
+
+## 38.3 Orden concreto para `WiiSMP` con `cpus=2`
+**⚠️ Recuperación primero:** sin boot‑args, si el arranque con 2 núcleos se cuelga, la única vuelta atrás es **editar la SD desde el Mac** (restaurar el `.bak` o poner `WiiSMP = false` en el plist del mkext). Tenlo preparado antes de probar, y deja **logs por IPC a Starbuck** (`WIIDBGLOG` con el boot‑arg de depuración activado por plist) en cada paso, para que la foto de la pantalla diga dónde se paró.
+
+**1. `WiiPE::start`** (núcleo 0, antes que `WiiCPU`):
+1. Parche de `stwcx.` del kernel (ya hecho).
+2. `HID5 |= PIRE` (ya hecho).
+3. **Solo si `WiiSMPCPUs > 1`:** `CAR |= 0xFC100000`, `BCR = 0x08000000`, `isync` (como Nintendo en el núcleo 0 antes de despertar).
+4. **Crear el nub `PowerPC,Espresso@1`** bajo `/cpus` (`IOPlatformDevice` con `reg = 1`, `state = "stopped"`, mismo `compatible`/`device_type` que el @0) para que case otra instancia de `WiiCPU`.
+
+**2. `WiiCPU::start` (núcleo 0):**
+- `numCPUs = 1 + (WiiSMPCPUs − 1)` = 2 → `initCPUInterruptController(2)` → `ml_init_max_cpus(2)` → la commpage sale **MP**.
+- `ml_processor_register(boot = true)` + `processor_start` (como ahora).
+
+**3. `WiiCPU::start` (núcleo 1):** `ml_processor_register(boot = false, start_paddr = 0x100)` → `processor_start` → XNU `cpu_start` rellena `ResetHandler` → **`WiiCPU::startCPU`**:
+1. Esperar, con un timeout de 5 s, a que la commpage esté poblada (`*_commPagePtr32 != 0` y en `_COMM_PAGE_CPU_CAPABILITIES` el campo `kNumCPUs = 2`, sin `kUP`).
+2. **Parchear los `stwcx.` de la commpage** (variantes MP) con stubs en la página `0xFFFF9000`; `dcbst/sync/icbi/isync`.
+3. Guardar los 64 bytes originales de `0x08100100` y escribir el **trampolín de Nintendo** (32.2) con `SRR0 = 0x100`; `flushDataCache` + `icbi`.
+4. `INTMSK(1) = 0` (todavía sin IPIs; ver 5).
+5. `SCR |= 1<<22` (`WAKE(1)`).
+6. `return KERN_SUCCESS`. XNU duerme hasta `SignalReady`.
+
+**4. Núcleo 1 despierto:** trampolín → `0x100` → `_start_cpu` → `allstart` (tabla ya parcheada para Espresso) → … → `PE_cpu_machine_init` → **`WiiCPU(1)::initCPU(false)`**:
+1. `gCPUIC->enableCPUInterrupt(this)` → `enabledCPUs = 2` → se despiertan los `registerInterrupt` que estaban esperando (el del PI incluido).
+2. Registrar el **vector 1** con un manejador solo de IPI (p. ej. `cpuNub->registerInterrupt(1, …)` tras `setCPUInterruptProperties(cpuNub)`; como ya son 2 CPU habilitadas, no se bloquea).
+3. **Después** de registrar el vector: `INTMSK(1) = 1 << 21` (IPI del núcleo 1). Nunca habilites la máscara antes de tener manejador: la IPI no se reconocería y habría una tormenta de interrupciones.
+4. `setCPUState(kIOCPUStateRunning)`.
+
+**5. IPIs (en `WiiPlatform`):**
+- `WiiCPU::signalCPU(target)`: `SCR |= 1 << (20 − target->getCPUNumber())`.
+- Núcleo 0: en `WiiInterruptController::handleInterrupt`, **antes** que el PI: si `SCR & (1<<20)` → borrar en bucle, `INTSR(0) = 1<<20`, `ipi_handler()`. Habilitar `INTMSK(0) |= 1<<20` al registrar el PI.
+- Núcleo 1: el manejador del vector 1 hace lo mismo con el bit 19 (`SCR`) y `INTSR(1) = 1<<21`.
+- `cpu_sync_timebase` usa IPIs hacia el núcleo 0: el camino del núcleo 0 tiene que estar listo antes del `WAKE`.
+
+**Diagnóstico si se cuelga** (foto):
+- Último log antes de `WAKE` → el trampolín o el núcleo no llegó a XNU.
+- Llega a `initCPU(false)` y se para → interrupciones/IPIs o timebase.
+- Llega a `SignalReady` y se cuelga después → errata/atómicos o caché (primer sospechoso: L2 apagada en el núcleo 1, que no debería colgar; después, la errata en espacio de usuario).
+- Opcional: que el trampolín escriba una marca en MEM0 (p. ej. `0x08100000 = 0xB00710AD`) antes del `rfi`, para saber si el núcleo llegó a ejecutarlo.
+
+## 38.4 Plan (sustituye a 36.4)
+| # | Paso | Riesgo |
+|---|---|---|
+| 5a | Preparar la recuperación por SD (mkext `.bak`, plist con `WiiSMP=false`) y los logs por IPC | ninguno |
+| 5b | `WiiSMP` con 2 núcleos según 38.3 | alto (foto + restaurar la SD) |
+| 6 | Estrés: `OSAtomicIncrement32`/`CompareAndSwap32`/`pthread_mutex` (por la commpage) + uso normal con audio | medio |
+| 7 | Filtro `lwarx…stwcx.` (38.2) y parche en disco por prioridad | medio |
+| 8 | L2 en el núcleo 1; núcleo 2 (`WAKE(2) = 1<<21`, IPI bit 18, `INTMSK(2) = 1<<22`) | alto |
