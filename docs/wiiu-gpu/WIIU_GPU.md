@@ -45,7 +45,8 @@
 > - **Partes 43b–44** — la coherencia la activan **CAR/BCR**; el núcleo 1 corrompe o se atasca porque `init750nb` le enciende la L1 **sin invalidar** y `cacheInit` escribe esa basura a memoria. Solución: `pfHID0` y `pfl2cr` del núcleo 1 parcheados (44.3).
 > - **Partes 45–46** — el núcleo 1 ya arranca; las interrupciones externas se congelan. Causa principal: **read-modify-write de las máscaras de Latte/PI sin spinlock** (carrera SMP → vector enmascarado para siempre). Ack del IPI en bucle como NetBSD.
 > - **Partes 47–48** — vectores de Latte soft-disabled porque su workloop quedó asignado al **núcleo 1 en reposo (doze)** y el IPI SIGPwake no lo despierta; prueba: quitar el doze (48.3).
-> - Si algo se contradice, vale la parte **más reciente** (48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 49–50** — sin doze el workloop sigue atascado ⇒ el núcleo 1 **no está en su bucle ocioso**. No-determinación: **carrera de wakeup perdido** en `IOCPUInterruptController::registerInterrupt` + `enabledCPUs++` (50.2). Diagnóstico con los contadores del per_proc 1 independiente de processor_start.
+> - Si algo se contradice, vale la parte **más reciente** (50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -62,14 +63,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 48.5** (revertir smp24; contadores por per_proc; arranque sin doze).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 50.6** (arreglar la carrera de IOCPU + diagnóstico del núcleo 1 que no dependa de processor_start).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -3187,3 +3188,105 @@ Sin código en el núcleo 1:
 2. Añadir al diagnóstico: hwDecrementers/hwExternals de los dos núcleos, `MPsigpStat` del núcleo 1 y `next_thread`/estado del procesador 1.
 3. Arranque con `bt pfCanDozeb` → nop (48.4).
 4. Según el resultado, elegir la solución de 48.4 y seguir con 46.5 (kexts de kextstat, luego userland).
+
+
+---
+
+# PARTE 49 — (informe del Mac) Sin doze no se arregla; máscaras de referencia
+
+- smp24 revertido. Doze anulado: `_machine_idle+0x58` (0xAF3F8, `beq cr1,+0x10`) → nop.
+- Referencia con 1 núcleo: PI mask0 `0x01000050`; Latte mask `0x000000A0 / 0x00000008`.
+  - Latte 16 y 24 están **siempre** pendientes y sin usar (la Parte 47 era una pista falsa).
+  - En SMP faltan **PI 6** y **Latte 5**: quedan soft-disabled y enmascarados.
+- hwCtr del núcleo 0: `+0x814` = hwExternals (+43/s), `+0x824` = hwDecrementers (+337/s).
+- smp26: `processor_start(1)` **no volvió** (sin cuadrado 15) y `registerInterrupt(0)` del núcleo 0 tampoco (sin cuadrado 14). El núcleo 1 sí pasó por initCPU y enableCPUInterrupt (11, 12, 23). **No determinista.**
+
+---
+
+# PARTE 50 — Respuesta: dos carreras en IOCPU y un núcleo 1 que no vuelve al bucle ocioso
+
+## 50.1 Sin doze, las IPI dan igual: el núcleo 1 no está en `idle_thread` (pregunta 1)
+`idle_thread` (xnu `kern/sched_prim.c:2537`):
+```c
+while (*threadp == THREAD_NULL && *gcount == 0 && *lcount == 0) {
+    ... machine_idle();      // sin doze: reactiva EE y vuelve al momento
+    (void)splsched();
+}
+```
+- Con el doze anulado, el bucle **consulta `processor->next_thread` sin parar**. Si `thread_setrun` pone ahí el workloop (`sched_prim.c:1996/2021`), el núcleo 1 lo recoge **sin necesitar ninguna IPI**.
+- Si aun así PI 6 / Latte 5 quedan soft-disabled, el núcleo 1 **no está ejecutando el bucle ocioso**. Hay tres casos:
+  - (a) está parado con EE=0 (girando en un lock o en un handshake);
+  - (b) está ejecutando un hilo que nunca cede (bucle dentro de un driver);
+  - (c) ha muerto (excepción en bucle o salto a basura).
+- El scheduler sigue viendo al procesador 1 como IDLE o RUNNING y le **despacha hilos que nunca corren**. Cada workloop que cae ahí se pierde: primero PI 6 y Latte 5, y el arranque se para.
+- Las IPI (SIGPast/SIGPwake) llegan con EE=1 si el núcleo está vivo; no son la causa ahora.
+
+## 50.2 La no-determinación: carreras reales en `IOCPUInterruptController` (pregunta 2)
+`xnu/iokit/Kernel/IOCPU.cpp:387-432`:
+```c
+void enableCPUInterrupt(IOCPU *cpu) {
+  ml_install_interrupt_handler(...);
+  enabledCPUs++;                                  // (1) no atómico
+  if (enabledCPUs == numCPUs) thread_wakeup(this);
+}
+IOReturn registerInterrupt(...) {
+  ... IOUnlock(vector->interruptLock);
+  if (enabledCPUs != numCPUs) {                   // (2) comprobación...
+    assert_wait(this, THREAD_UNINT);              //     ...y espera NO atómicas
+    thread_block(THREAD_CONTINUE_NULL);
+  }
+}
+```
+Y `WiiCPU::initCPU(true)` (osx-drivers `WiiCPU.cpp:133-150`) hace `enableCPUInterrupt(this)` y luego `cpuNub->registerInterrupt(0, …)`, **en cada núcleo**.
+- **Wakeup perdido (2):**
+  1. El núcleo 0 (en su `initCPU`) lee `enabledCPUs == 1` y decide dormir.
+  2. **Antes** de su `assert_wait`, el núcleo 1 ejecuta `enabledCPUs++` y `thread_wakeup(this)`. Nadie espera todavía, así que el wakeup se pierde.
+  3. El núcleo 0 hace `assert_wait` + `thread_block` y **duerme para siempre**. Es el cuadrado 14 ausente.
+- Con un solo núcleo, o en los Mac de Apple (donde el esclavo tarda mucho más en llegar ahí), la ventana nunca se abre. En Espresso, con el WAKE casi inmediato, a veces sí. **Esto explica que dependa del arranque.**
+- El `++` no atómico (1) solo importa si dos núcleos lo ejecutan a la vez. Hoy el núcleo 0 lo hace mucho antes, pero con 3 núcleos sería otra carrera.
+- El cuadrado 15 ausente (`processor_start(1)` no vuelve) es la otra cara: el hilo que lo llamó duerme en `cpu_start` esperando `SignalReady` del núcleo 1 (`cpu.c:363-371`). El núcleo 1 no llegó a `cpu_flags |= SignalReady` (`cpu.c:180-190`); se quedó entre `initCPU` y el final de `cpu_machine_init`, es decir:
+  - en `registerInterrupt(0)` de **su** `initCPU` (IOTakeLock es un mutex, llamado aquí con interrupciones apagadas en un núcleo que aún arranca; `IOLockLock` contendido **bloquearía el hilo**),
+  - o en `while (!(mproc_info->cpu_flags & SignalReady))`,
+  - o en el handshake de `cpu_sync_timebase`, que necesita que el núcleo 0 procese la IPI CPRQtimebase.
+
+**Arreglo (en osx-drivers, sin tocar el kernel):**
+- Crear `WiiCPUInterruptController : IOCPUInterruptController` (si ya tienes la subclase del `handleInterrupt`, úsala) y sobrescribir:
+  - `enableCPUInterrupt(cpu)`: `ml_install_interrupt_handler(...)` igual que el original; luego `OSIncrementAtomic(&_enabled)` (contador **propio**, porque `enabledCPUs` es `private`) y `thread_wakeup(this)`.
+  - `registerInterrupt(...)`: copia el cuerpo del original (rellenar `vectors[source]`; `vectors` es `protected` en `IOInterruptController`) y cambia la espera por un **bucle sin carrera**:
+    ```cpp
+    while (_enabled < numCPUs) IOSleep(1);     // sondeo: imposible perder el wakeup
+    ```
+    Si el llamante es un núcleo que aún arranca (el núcleo 1 dentro de `cpu_machine_init`), `_enabled` ya vale `numCPUs` y no duerme.
+  - En `initCPU(true)` de los secundarios, **no llames a `registerInterrupt` con un mutex** si puedes evitarlo: registra los vectores de todos los núcleos desde el núcleo 0 antes del WAKE y deja al secundario solo `enableCPUInterrupt` + `enableInterrupt`.
+- Esto también vale para upstream (con 3 núcleos la carrera del `++` aparece seguro).
+
+## 50.3 Diagnóstico del núcleo 1 que no dependa de `processor_start`
+Lanza el hilo de diagnóstico **antes** de `processor_start(1)`, por ejemplo desde `WiiPE::start` o con un `IOTimerEventSource` propio, ligado al núcleo 0 si puedes (`thread_bind` no se exporta; basta con que corra antes de arrancar el 1). Cada segundo pinta:
+1. `per_proc[1] + 0x814` (hwExternals) y `+ 0x824` (hwDecrementers). Tienen el mismo layout que en el núcleo 0; el per_proc virtual del núcleo 1 es el `arg` de `startCPU`.
+2. `per_proc[1]->cpu_flags` (¿SignalReady/BootDone?) y `MPsigpStat`. Los offsets se sacan con `otool` de `cpu_signal` (`lwz …,MPsigpStat(rX)`) y de `cpu_machine_init` (`lhz …,cpu_flags`).
+3. **Ping al núcleo 1**: cada segundo pon tú `SCR |= IPI_PEND(1)` (con tu lock) **sin mensaje de XNU**. En tu `handleInterrupt(source=1)` incrementa un contador global de pings recibidos.
+   - Si sube, el núcleo 1 vive con EE=1.
+   - Si no sube, está con EE=0 o muerto. Diferéncialo con hwDecrementers: si sube, tiene EE=1 a ratos.
+4. **Dónde está el núcleo 1:** en ese mismo `handleInterrupt(source=1)` guarda el PC interrumpido.
+   - En XNU la savearea de la interrupción queda en `current_thread()->machine.pcb`. Su `save_srr0` está en un offset fijo; sácalo de `otool -tv` de `_interrupt` (`lwz rX,save_srr0(r3)`), en la zona que lee SRR0 para `T_DECREMENTER`/perfmon.
+   - Guarda también `current_thread()`. Así ves en qué hilo y en qué PC gira el núcleo 1 (busca el PC en `nm mach_kernel` / en los kexts).
+   - Si el PC está siempre en el mismo sitio, tienes el bucle.
+5. Si ni el ping ni el decrementador suben: EE=0 o muerto. Pon balizas en `hw_lock_lock`/`hw_lock_mbits` (guardar la dirección del lock en lowGlo) y en `lck_mtx_lock`.
+
+## 50.4 Candidatos a "el núcleo 1 no vuelve al bucle" (por orden)
+1. **Mutex en contexto de arranque:** `initCPU` del núcleo 1 llama a `registerInterrupt` → `IOTakeLock`. Si está contendido, `lck_mtx_lock` bloquea el hilo de arranque del procesador antes de `SignalReady`, un estado del que XNU no sabe salir. Se arregla con 50.2 (registrar desde el núcleo 0).
+2. **Un hilo del driver en un bucle sin ceder** (por ejemplo el propio workloop de PI 6 / Latte 5 esperando un registro, o el `while (vector->interruptActive)` de `IOInterruptController::enableInterrupt`, que gira sin límite si `interruptActive` se queda a 1). El PC de 50.3.4 lo dirá.
+3. **stwcx. sin parchear** en kexts que cargó kextd **después** del mkext (46.5): un lock corrupto → giro eterno. Escanea los de `kextstat` y los binarios de `/System/Library/Extensions` que se cargan antes del escritorio.
+4. **tlbie no difundido entre núcleos** **[NO VERIFICADO]**. NetBSD y Linux en Espresso con SMP asumen que sí se difunde. Si no fuera así, el núcleo 1 usaría traducciones viejas tras cada `pmap_remove`, lo que da corrupción aleatoria y no determinista. Se prueba al final si todo lo demás falla.
+
+## 50.5 ¿Aparcar el núcleo 1? (pregunta 3)
+- XNU 10.4 lo haría con `processor_exit` → `processor_shutdown` (es lo que usa CHUD `chudxnu_enable_cpu`). Eso lleva a `cpu_sleep`/`PE_cpu_halt` → `WiiCPU::haltCPU`/`quiesceCPU`, que están **en TODO**. Sin implementarlos se cuelga o devuelve basura. No compensa ahora.
+- "Arrancar el 1 y no dejarle hilos" no existe en xnu-792: `processor_assign`/psets múltiples están desactivados.
+- Aparcarlo en el trampolín (sin entrar en XNU) equivale a UP. No mide nada nuevo.
+- **Recomendación:** no aparcar. Con 50.2 + 50.3 deberías ver exactamente dónde está el núcleo 1 en el siguiente arranque.
+
+## 50.6 Orden
+1. Arreglar las carreras de 50.2 (contador atómico propio + espera por sondeo; registrar los vectores desde el núcleo 0).
+2. Hilo de diagnóstico lanzado antes de `processor_start(1)` con hwExternals/hwDecrementers del núcleo 1, cpu_flags, MPsigpStat, ping por SCR y PC + hilo de la última interrupción del núcleo 1 (50.3).
+3. Arrancar y, según el PC, seguir 50.4.
+4. Mantener doze anulado hasta que el núcleo 1 funcione. Después, reactivarlo y comprobar si la ICI despierta de doze (48.1).
