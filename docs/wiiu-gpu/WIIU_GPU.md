@@ -61,7 +61,8 @@
 > - **Partes 75–76** — el mutex que espera OHCI (0x02AEE9E0) marca como dueño a un hilo que ya no lo tiene, con WAIT y 8 esperando. La firma encaja con un **`stwcx.` que "acierta" sin deber** en el unlock rápido: el erratum sigue vivo entre núcleos aunque haya dcbst+ABE. **Prueba decisiva: tortura de atómicos con dos hilos atados a cada núcleo** (76.3) y registro del historial de ese mutex (76.4).
 > - **Partes 77–78** — **el apaño correcto del erratum es `dcbf` antes de `stwcx.`** (`dcbst` pierde incrementos; `dcbst;sync` pierde muchísimos). Aplicado en todo. Sigue la manzana con los dos núcleos ociosos: toca un **recorrido de todos los hilos** (estado, evento, pila) para ver quién espera a quién (78.2).
 > - **Partes 79–80** — `dcbf` cubre también las ventanas con `lwz`/`stw`/`eieio`. Ahora hay una **tormenta de SIGP** (7-17 mil/s) con cambios de contexto normales: es un **livelock** (un hilo que reintenta sin fin: `mutex_pause`, `lock_try`, `thread_block` en bucle), no un fallo de las IPI. Hay que **cazar el hilo caliente** (80.3).
-> - Si algo se contradice, vale la parte **más reciente** (80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 81–82** — ¡**escritorio con 2 núcleos reales** (arranque tardío, tormenta resuelta quitando pfCanDoze)! Fallan procesos de usuario (segfault en sudo, sshd muere). Sospechoso principal: **XNU no hace `tlbsync`** porque Espresso no tiene `pfSMPcap` → activar `pfSMPcap` en `pf.Available` **y en SPRG2** de los dos núcleos (82.2). Verificar que ningún hilo de usuario corre en el núcleo 1 (82.3).
+> - Si algo se contradice, vale la parte **más reciente** (82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -78,14 +79,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 80.5** (SIGPast y SIGPwake por separado; hilo caliente en `thread_setrun`; su pila).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 82.5** (pfSMPcap → tlbsync; contador de hilos de usuario en el núcleo 1; crash log de sudo; commpage con dcbf).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -4396,3 +4397,65 @@ Con los dos núcleos ociosos, el sistema es una **foto fija**: todos los hilos d
 2. SIGPast/SIGPwake por separado + histograma de LR de `cause_ast_check` + **histograma de hilos en `thread_setrun`** (80.3).
 3. Del hilo caliente: task, prioridad, `wait_event`, continuación y pila. Si es `mutex_pause`, seguir el lock (74.1).
 4. Revisar los 23 `stwcx.` excluidos (80.4).
+
+
+---
+
+# PARTE 81 — (informe del Mac) Escritorio con dos núcleos reales (arranque tardío); fallan procesos de usuario
+
+- **smp50**: quitar `pfCanDoze|pfCanNap` (0x02000800) de `pf.Available` (**per_proc + 0xA0**) de los dos núcleos → **la tormenta desaparece** (0 SIGP/s). El arranque llega a la pantalla gris y se queda en silencio.
+- **smp51** = smp50 + **arranque tardío** (`WiiSMPLateStart` = 240 s):
+  - UP normal, SSH a los 36 s;
+  - a los ~4,5 min, **`hw.activecpu: 2`**; escritorio vivo, hora avanzando, el hilo de diagnóstico corre en el núcleo 1;
+  - SSH a trompicones: `sudo -v` → **SIGSEGV (139)**; `sudo dd … /dev/kmem` corta la sesión; ~5 min después, SSH ya no responde (la pantalla sigue viva).
+- Siguen activos: el gancho de `thread_setrun` que ata el userland al núcleo 0, `dcbf` en kernel/vectores/commpage y el parche parcial de userland.
+
+---
+
+# PARTE 82 — Respuesta: al kernel le falta `tlbsync`; y hay que comprobar que el userland no pisa el núcleo 1
+
+## 82.1 Lo que ya funciona
+Por primera vez **el kernel aguanta con dos núcleos**: el escritorio sigue vivo y el núcleo 1 ejecuta hilos del kernel. Lo que falla ahora son **procesos de usuario**, incluso atados al núcleo 0. Eso apunta a cosas que el **kernel** hace **sobre la memoria de usuario** desde el otro núcleo.
+
+## 82.2 Sospechoso principal: sin `tlbsync`, un `tlbie` remoto no se espera
+- XNU solo emite `tlbsync` (esperar a que **todos** los núcleos hayan terminado de invalidar la entrada) si la CPU tiene **`pfSMPcap`** (`pfSMPcap` = **0x10000000**, `ppc/exception.h:60`). Las rutinas de `hw_vm.s` leen las características **de SPRG2** (`mfsprg rX,2`, p. ej. l.139/520/559/1851/1968/2116) y hacen:
+  ```
+  tlbie  rX
+  beq-   sin_tlbsync        ; ← Espresso: pfSMPcap = 0
+  eieio ; tlbsync ; sync
+  ```
+  (`hw_vm.s:698-706`, `1015-1024`, `4364-4375`, `8288-8297`; también `cacheInit`).
+- Con ABE, el `tlbie` **sí se difunde**, pero sin `tlbsync` el núcleo que lo emite **no espera** a que el otro lo haya aplicado. El otro núcleo puede usar la traducción vieja durante una ventana corta, justo cuando la página física ya se ha liberado o reutilizado.
+  - Eso afecta sobre todo a la **memoria de usuario**: `pmap_remove`, copy-on-write, `vm_pageout`, liberar y reutilizar páginas de procesos. Por ejemplo: el hilo de pageout (hilo del kernel, puede correr en el núcleo 1) roba una página de `sudo`; `sudo` (en el núcleo 0) aún la ve en su TLB → **datos ajenos → SIGSEGV**, y procesos como sshd mueren o se cuelgan.
+- **NetBSD en Espresso MP usa `tlbsync` siempre** (`powerpc/oea/pmap.c:484-487`: `TLBSYNC()` = `tlbsync`; en Espresso MP no hay `MD_TLBSYNC` especial). El 750 lo implementa como operación de bus, que con ABE se difunde.
+- **Cambio:** activar `pfSMPcap` en los **dos** núcleos:
+  1. `pf.Available` (per_proc + 0xA0) `|= 0x10000000` en los dos per_proc;
+  2. **SPRG2 de cada núcleo** `|= 0x10000000`. Es la copia viva que leen `hw_vm.s` y `cacheInit`, y cada núcleo tiene la suya: hazlo **en cada núcleo** (`mfsprg r3,2; oris r3,r3,0x1000; mtsprg 2,r3`). En el núcleo 0, en `WiiPE::start`; en el núcleo 1, en `WiiCPU::initCPU` (con `_isBootCPU` falso) o en el trampolín **después** de `allstart`, que reescribe SPRG2.
+  - `pfSMPcap` solo cambia esas ramas de `tlbsync` (los 4 sitios de `hw_vm.s` + `cacheInit`, `machine_routines_asm.s:1216`). No hay más usos en xnu-792.
+- Si `tlbsync` en Espresso diera problemas (colgarse), lo verías enseguida con una prueba: dos hilos atados, uno que hace `tlbie`+`tlbsync` en bucle y el otro normal. NetBSD lo usa, así que debería ir bien.
+
+## 82.3 Pregunta 2: ¿basta `bound_processor` en `thread_setrun`?
+En xnu-792, todos los caminos que ponen un hilo en un núcleo respetan `bound_processor`:
+- `thread_setrun` (lo que enganchas);
+- `thread_select` solo sigue con el hilo actual si `bound_processor` es nulo o es ese núcleo (`sched_prim.c:1171-1172`);
+- el traspaso directo de `mach_msg` (`ipc/mach_msg.c:1130-1132`) y `thread_switch` (`kern/syscall_subr.c:271-272`) comprueban `bound_processor != processor`;
+- `idle_thread` solo recoge `next_thread`, que pone `thread_setrun`.
+
+**Hueco posible:** un hilo de usuario que **nunca** ha pasado por `thread_setrun` desde que instalaste el gancho. Con el arranque tardío no debería pasar (el gancho se instala al principio). Pero verifícalo:
+- **Contador en tu gancho de `thread_dispatch`** (o en `idle_thread` al recoger): si `current_processor() == 1` y `thread->task != kernel_task` → contar y guardar el hilo. **Debe ser 0.**
+- Y lee `processor[1]->active_thread` y su `task` cuando falle.
+- Si no es 0: ese hilo de usuario en el núcleo 1 ejecuta `lwarx`/`stwcx.` sin parche → corrupción. Ata también en `thread_create`/`thread_start` o en `thread_dispatch`: si `task ≠ kernel_task` y `bound_processor == 0`, átalo y fuerza un `thread_setrun`.
+
+## 82.4 Pregunta 1: qué mirar en los minutos de SSH
+Por orden de valor:
+1. **Crash log de `sudo`**: `/Library/Logs/CrashReporter/sudo.crash.log` (y `/var/log/system.log`). PC, biblioteca y backtrace del SIGSEGV. Si cae en una página que "no debería" tener esos datos (puntero basura en `malloc`, `libSystem`), apoya 82.2. Si cae dentro de un bucle `lwarx`/`stwcx.`, apoya 82.3.
+2. El **contador de 82.3** (hilos de usuario en el núcleo 1).
+3. **Commpage con `dcbf`** (82.4.c): un programa de usuario trivial que lea su commpage (0xFFFF8000–0xFFFFFFFF) y cuente `dcbst`+`stwcx.` (0x7C00006C) frente a `dcbf`+`stwcx.` (0x7C0000AC). Debe haber **0** `dcbst` antes de `stwcx.`.
+4. `sudo dd … /dev/kmem` cortaba la sesión: evita `/dev/kmem` con dos núcleos por ahora (copia a través de páginas del kernel que cambian de sitio). Lee con tu kext + `IOLog`.
+
+## 82.5 Orden
+1. **`pfSMPcap` en `pf.Available` y en SPRG2 de los dos núcleos** (82.2) → activa `tlbsync` en `hw_vm.s`.
+2. Contador de hilos de usuario en el núcleo 1 (82.3) + verificación de la commpage (82.4.3).
+3. Arranque tardío otra vez. Probar por SSH: `sudo -v` varias veces, compilar algo pequeño, copiar ficheros grandes, y dejarlo 15 min.
+4. Si aguanta: medir (con el userland atado al núcleo 0, el paralelismo será entre kernel y usuario: por ejemplo E/S de disco y red mientras corre un bucle de usuario).
+5. **Pregunta 3 — la dylib de stubs (72.1.a):** después. Primero hay que tener el kernel sólido con usuario atado. Liberar el userland al núcleo 1 sin cubrir los 28 000 sitios sería volver a meter el erratum.
