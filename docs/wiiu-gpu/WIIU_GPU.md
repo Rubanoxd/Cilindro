@@ -62,7 +62,8 @@
 > - **Partes 77–78** — **el apaño correcto del erratum es `dcbf` antes de `stwcx.`** (`dcbst` pierde incrementos; `dcbst;sync` pierde muchísimos). Aplicado en todo. Sigue la manzana con los dos núcleos ociosos: toca un **recorrido de todos los hilos** (estado, evento, pila) para ver quién espera a quién (78.2).
 > - **Partes 79–80** — `dcbf` cubre también las ventanas con `lwz`/`stw`/`eieio`. Ahora hay una **tormenta de SIGP** (7-17 mil/s) con cambios de contexto normales: es un **livelock** (un hilo que reintenta sin fin: `mutex_pause`, `lock_try`, `thread_block` en bucle), no un fallo de las IPI. Hay que **cazar el hilo caliente** (80.3).
 > - **Partes 81–82** — ¡**escritorio con 2 núcleos reales** (arranque tardío, tormenta resuelta quitando pfCanDoze)! Fallan procesos de usuario (segfault en sudo, sshd muere). Sospechoso principal: **XNU no hace `tlbsync`** porque Espresso no tiene `pfSMPcap` → activar `pfSMPcap` en `pf.Available` **y en SPRG2** de los dos núcleos (82.2). Verificar que ningún hilo de usuario corre en el núcleo 1 (82.3).
-> - Si algo se contradice, vale la parte **más reciente** (82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 83–84** — con `pfSMPcap`/`tlbsync`, **2 núcleos estables >10 min con SSH**; sin SIGSEGV. Quedan: un `cp` con EIO y un load ~3 subiendo sin CPU. En xnu el load cuenta **hilos ejecutables** (`pset->run_count`, atómico), no esperas: o hay una **fuga de `hw_atomic_add/sub`** o hilos ejecutables que nadie recoge (84.1). EIO: primero mirar los mensajes de WiiSDHC en system.log (84.2).
+> - Si algo se contradice, vale la parte **más reciente** (84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -79,14 +80,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 82.5** (pfSMPcap → tlbsync; contador de hilos de usuario en el núcleo 1; crash log de sudo; commpage con dcbf).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 84.4** (run_count frente a hilos TH_RUN; tortura de add/sub/CAS; logs de WiiSDHC).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -4459,3 +4460,64 @@ Por orden de valor:
 3. Arranque tardío otra vez. Probar por SSH: `sudo -v` varias veces, compilar algo pequeño, copiar ficheros grandes, y dejarlo 15 min.
 4. Si aguanta: medir (con el userland atado al núcleo 0, el paralelismo será entre kernel y usuario: por ejemplo E/S de disco y red mientras corre un bucle de usuario).
 5. **Pregunta 3 — la dylib de stubs (72.1.a):** después. Primero hay que tener el kernel sólido con usuario atado. Liberar el userland al núcleo 1 sin cubrir los 28 000 sitios sería volver a meter el erratum.
+
+
+---
+
+# PARTE 83 — (informe del Mac) smp52: dos núcleos estables más de 10 minutos con SSH
+
+- `pfSMPcap` en `pf.Available` de los dos per_proc y en SPRG2 de cada núcleo; arranque tardío a 240 s.
+- **SSH responde siempre** tras incorporarse el núcleo 1 (más de 10 min). Sin `sudo.crash.log` en el arranque anterior.
+- Estrés cada ~80 s: `sudo -v` sin SIGSEGV; `gcc-4.0` 6/6; `dd` 40 MB + `cp` + `cmp` 5/6. **Una vez: `cp: /tmp/big: Input/output error`.**
+- `top`: todo al 0 % de CPU, pero **load average ~3,3 y subiendo** (1,56 → 2,76 → 3,28 en 15 min).
+- `ps aux | head` por ssh a veces no devuelve nada; `ps aux > archivo` sí.
+
+---
+
+# PARTE 84 — Respuesta: el load average delata una fuga de contador; el EIO, a los logs
+
+## 84.1 Load ~3 con 0 % de CPU (pregunta 2)
+- **En xnu el load average no cuenta esperas de E/S** (a diferencia de Linux). Cuenta **hilos ejecutables**: `nthreads = pset->run_count - 1` (`kern/sched_average.c:109-135`).
+- `run_count` se actualiza **solo con atómicos**: `pset_run_incr/decr` = `hw_atomic_add/sub(&pset->run_count, 1)` (`kern/processor.h:206-209`), desde los dos núcleos (`thread_unblock` / bloquear hilos).
+- Load subiendo poco a poco con la CPU al 0 % ⇒ una de dos:
+  - **(a) fuga del contador:** algún `hw_atomic_add`/`hw_atomic_sub` entre núcleos se pierde (+1 que no baja). Cada pérdida sube el load para siempre. **Es lo más probable** por cómo sube (1,5 → 2,8 → 3,3);
+  - **(b) hilos ejecutables que nadie coge:** por ejemplo en la cola local de un núcleo que no la mira.
+- **Distinguirlo:** lee `pset->run_count` (offset: `lwz` en `_compute_averages` o en `_thread_unblock`) y **cuenta tú los hilos con `state & TH_RUN`** recorriendo `pset->threads` (78.2).
+  - `run_count` > número real de TH_RUN ⇒ **(a)**;
+  - iguales y con hilos TH_RUN sin correr ⇒ **(b)**: mira en qué cola están (`thread->runq` ≠ 0 → qué `run_queue`: ¿la local del núcleo 0 o del 1, o la del pset?) y por qué ese núcleo no los recoge.
+- **Si es (a):** la tortura solo probó `OSIncrementAtomic`. Amplíala:
+  - `hw_atomic_sub`, `hw_atomic_add` **mezclados** (un hilo suma y el otro resta; el resultado debe volver a 0);
+  - `hw_compare_and_store` en bucle;
+  - `hw_atomic_or`/`hw_atomic_and`.
+  Revisa también con `otool` que **cada** una de esas funciones tiene su stub con **`dcbf`** (no `dcbst`) y vuelta al `bne`. Si una falla, cambia ese stub.
+- El `ps aux | head` vacío probablemente es SIGPIPE o el buffer de ssh, no el kernel. No lo persigas ahora.
+
+**Ver hilos en Tiger (pregunta 2):**
+- `ps -axo pid,stat,wchan,pri,command`. `stat`: `R` ejecutable, `U` espera no interrumpible, `S` dormido; `wchan` = en qué espera. Con `ps -axM` ves **todos los hilos** de cada proceso con su estado.
+- `sysctl vm.loadavg` para el valor exacto.
+- Un hilo de usuario en `R` durante minutos sin %CPU es un síntoma de (b).
+
+## 84.2 El EIO de `cp` (pregunta 1)
+- **WiiSDHC es seguro frente a SMP en su estructura:** usa `IOInterruptEventSource` (sin filtro) y `IOCommandGate`, así que la action de la interrupción y el arranque de comandos (`executeCommandGated` → `doAsyncIO`) están **serializados por el gate del workloop** (`WiiSDHC.cpp:91-103`, `WiiSDHC_Commands.cpp:146-214`). No tiene el problema de OHCI (filtro concurrente, 52.4).
+- La caché del DMA: lectura → `invalidate_dcache` del double buffer y copia; escritura → `flush_dcache` antes (`WiiSDHC_Commands.cpp:374/491`). Con ABE, `dcbi`/`dcbf` se difunden, así que es correcto desde cualquier núcleo.
+- **Primero mira qué error fue.** El driver solo devuelve `kIOReturnIOError`/`Timeout` en estos sitios, y todos dejan un mensaje (`WIISYSLOG`) en `/var/log/system.log`:
+  - `"Timed out waiting for command inhibit"` (l.249) → la tarjeta seguía ocupada;
+  - `"Command completed without interrupt? 0x…"` (l.325) → llegó una interrupción sin CommandComplete;
+  - `"Command data without interrupt? 0x…"` (l.363) → sin DMA ni TransferComplete;
+  - `"Didn't get all the data here"` (l.398) → faltan datos;
+  - `"No command?"` (`WiiSDHC_Private.cpp:30`) → interrupción sin comando en curso.
+  Busca también las líneas del kernel `disk0s…: I/O error`.
+- **Sospechoso si sale "without interrupt":** `LatteInterruptController::handleInterrupt` escribe el **W1C de la causa después** de llamar a los manejadores (`LatteInterruptController.cpp:198-203`). Si el SDHC levanta un **nuevo** flanco mientras se atiende el anterior, ese W1C lo borra. La action lee entonces un `intStatus` incompleto y la máquina de estados lo da por error.
+  - Con dos núcleos, la action del workloop corre **a la vez** que el manejador primario del núcleo 0, así que la ventana es mayor.
+  - **Arreglo:** en Latte (y en el PI), reconocer la causa **antes** de llamar a los manejadores (W1C de `cause & mask` al leerla), como hace NetBSD (`pic_pi.c: pi_get_irq` → `pi_ack_irq`), o reconocer solo los bits ya procesados.
+- Si el error es **"Didn't get all the data"**, mira `getActualByteCount` y `prepareDataTx`: son campos del comando que solo toca el gate. En ese caso sospecha de la fuga de atómicos de 84.1 (contadores de `IOMemoryDescriptor`/UPL).
+
+## 84.3 Pregunta 3: ¿dylib de stubs ya?
+- **No todavía.** Primero la fuga del load (84.1), que puede ser la misma causa que el EIO, y el EIO (84.2). Soltar userland en el núcleo 1 multiplicaría el uso de atómicos y lo haría más difícil de depurar.
+- Mientras tanto ya puedes **medir** lo que hay: dos núcleos con el kernel repartido. Prueba E/S de disco y red a la vez que un bucle de usuario, y compara con UP.
+
+## 84.4 Orden
+1. `pset->run_count` frente al número real de hilos TH_RUN (84.1). Si hay fuga: tortura de `hw_atomic_add/sub` mezclados, `hw_compare_and_store` y `or`/`and`, y revisión de sus stubs.
+2. `grep -i "sdhc\|without interrupt\|inhibit\|I/O error" /var/log/system.log` del arranque con EIO (84.2). Si es "without interrupt": reconocer la causa de Latte antes de despachar.
+3. Repetir el estrés 15-30 min y vigilar `sysctl vm.loadavg`.
+4. Después, la dylib de stubs (72.1.a).
