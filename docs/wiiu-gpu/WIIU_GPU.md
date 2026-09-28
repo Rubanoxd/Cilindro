@@ -68,7 +68,8 @@
 > - **Partes 89–90** — ningún hilo de usuario corre en el núcleo 1 y aun así el userland se corrompe (salida duplicada, fichero recién creado que desaparece). Encaja con **bits R/C (Changed) de las PTE perdidos** entre núcleos: **NetBSD Espresso MP hace `dcbst` de la PTE tras cada escritura** y XNU no. Parchear las ~12 escrituras de PTE de `hw_vm.s` (+ lectura de R/C) con `dcbf` (90.2).
 > - **Partes 91–92** — con `dcbf` en las PTE: **COW y stdio arreglados** (cowtest 1000/1000). Queda un SIGSEGV en la **primera** ejecución de algunos binarios y al crear ficheros nuevos. Pasos: **core dump + gdb** para ver el PC (92.1), prueba de coherencia de **`dcbz`** entre núcleos (92.2), atar el workloop de SDHC al núcleo 0 como descarte (92.3), y cambiar los 2 `dcbst` restantes a `dcbf`.
 > - **Partes 93–94** — los procesos que mueren acaban todos en el `trap` de `__NSRaiseError` (Foundation), incluso `bash`. Encaja con una **página con identidad equivocada** (datos o punteros de otra biblioteca). Faltan por tapar las **revalidaciones de PTE** de `hw_walk_phys`, `hw_protect`, `hw_test_rc` y `hw_test_rc_gv` (94.1). Confirmar con la cadena de llamadas del core y el puntero usado (94.2), y comparar en UP (94.3).
-> - Si algo se contradice, vale la parte **más reciente** (94 > 93 > 92 > 91 > 90 > 89 > 88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 95–96** — **SMP estable con userland sano** (cowtest, gcc, cp/cmp, 0 errores de SD). Disco dañado por pruebas antiguas: reparado y con copia. Siguiente: (1) **lista blanca** de procesos desatados para medir ya (96.2); (2) **islas de stubs** en la región compartida, cargadas como dependencia de libSystem (96.1); (3) arranque SMP temprano con vigilancia del disco (96.3).
+> - Si algo se contradice, vale la parte **más reciente** (96 > 95 > 94 > 93 > 92 > 91 > 90 > 89 > 88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -85,14 +86,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 94.5** (dcbf en las 7 revalidaciones de PTE restantes; análisis del core; comparación en UP).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 96.4** (lista blanca + medidas; islas de stubs; arranque temprano).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -4832,3 +4833,53 @@ Que se agotaran los tiempos de la sincronización por turnos sugiere que el **fl
 2. Pasada UP de los mismos binarios (94.3). Luego SMP con el parche nuevo.
 3. Si en SMP sigue algún SIGSEGV: análisis del core (94.2): llamador → puntero → valor esperado.
 4. Si todo pasa: repetir cowtest, heredoc/`date`, presión de memoria, y después medidas (88.3) y arranque SMP temprano.
+
+
+---
+
+# PARTE 95 — (informe del Mac) smp58: SMP estable con userland sano
+
+- 6 revalidaciones de PTE más con `dcbf` (`hw_walk_phys`, `hw_protect`, `hw_test_rc`, `hw_test_rc_gv`) → "15 of 15 PTE accesses flushed".
+- **Incidente de disco:** 24 binarios del sistema con bloques pisados (libwrap, libXplugin, libpcap, ScreenSaver, Tcl/Tk…), seguramente de los EIO de smp51-53. Restaurados 23 (falta `libgmalloc`); `diskutil repairVolume`. **También había fuentes dañadas en la Wii U** (`WiiCPU.cpp`, `WiiSDHC.cpp`). Copia del volumen en `DATOS/Wiintosh/backups/`.
+- smp58 con 2 núcleos: cowtest 800/800, `date|cat` ×100, 14 binarios, gcc ×20, cp+cmp ×5: **todo bien**; 0 errores de SDHC; bucle `sh` 3-4 s (como UP). `grolbp`/`hdxml2manxml` mueren igual en UP (no es SMP).
+
+---
+
+# PARTE 96 — Respuesta: medir ya con una lista blanca, y cómo hacer las islas de stubs
+
+## 96.1 Pregunta 1: islas de stubs para las bibliotecas de la región compartida
+**Cómo es la región compartida de Tiger** (`osfmk/mach/shared_memory_server.h:44-49`): **texto** en 0x90000000–0x9FFFFFFF y **datos** en 0xA0000000–0xAFFFFFFF (por eso las split-seg tienen los datos a +256 MB). Es **global**: una biblioteca cargada por cualquier proceso queda mapeada en **todos**. Por eso `bash` "ve" Foundation en 0x92BBE000 sin enlazarla.
+
+**Diseño que propongo:**
+1. **Islas:** unas pocas **dylibs split-seg "solo stubs"** (`libstwcx_isla0.dylib`, `…1`, …), cada una con **dirección preferente en un hueco libre** de 0x9xxxxxxx.
+   - Cada isla atiende los sitios que estén a **menos de ±32 MB** (una ventana de 64 MB), así que harán falta **4-5 islas** para cubrir las bibliotecas parcheadas.
+   - Cada stub es el de siempre: `dcbf rA,rB ; stwcx. rS,rA,rB ; b vuelta` (12 bytes). Con ~28 000 sitios son ~330 KB repartidos entre las islas.
+2. **Huecos:** mira la ocupación real con `vmmap <pid>` de un proceso gráfico (p. ej. Finder) en UP, o calcula los `LC_SEGMENT __TEXT` (vmaddr/vmsize) de todas las bibliotecas de `/System/Library/Frameworks`, `PrivateFrameworks` y `/usr/lib`. Elige huecos de ≥ 128 KB dentro de cada ventana.
+3. **Carga garantizada antes de usarse:** el problema es que `launchd` (el primer proceso) ya usa libSystem. Si libSystem salta a una isla que aún no está mapeada, muere. Solución: **añade las islas como dependencias de `libSystem.B.dylib`** con comandos `LC_LOAD_DYLIB` nuevos en su cabecera Mach-O. Si no hay hueco en la cabecera, usa una biblioteca que libSystem ya carga siempre, como `libgcc_s`. Así dyld las mapea en la región compartida con el **primer** proceso, y a partir de ahí están en todos.
+   - Mira el espacio libre tras los load commands: `sizeofcmds` frente al offset de la primera sección. Cada `LC_LOAD_DYLIB` ocupa ~56-64 bytes con el nombre.
+   - Las islas deben ser **split-seg y prebound** (enlaza con `-seg_addr_table` o `-seg1addr` en su hueco y `-prebind`), para que dyld las ponga en su dirección exacta. Si dyld las desplazara, los `b` relativos de los sitios no llegarían.
+4. **El parcheador** cambia cada `stwcx.` por `b <stub en la isla de su ventana>` y cada stub vuelve a `sitio+4`. Deja una **tabla** (fichero en `/var/db/`) con sitio → isla → stub, para deshacer.
+5. **Lo que no cubren las islas:** binarios fuera de la región compartida (ejecutables, bundles y plugins cargados en otras direcciones). Para esos sigue valiendo el relleno de su `__TEXT` (lo que ya hiciste). Los que no quepan quedan en la lista negra de 96.2.
+
+**Alternativa por kernel** (más limpia, pero más trabajo): que tu kext mapee las páginas de stubs directamente en el submapa de texto compartido al arrancar, antes de `launchd` (`vm_map_enter` en el mapa de texto de la región compartida por defecto; símbolos de `bsd/vm/vm_unix.c` / `shared_region`). Así no hay que tocar la cabecera de libSystem.
+
+## 96.2 Pregunta 2: sí, lista blanca ya (para medir)
+- Tiene sentido: libSystem está parcheada al 100 % (4/4), y `sh`, `bash`, `make`, `gcc`, `cc1`, `as`, `ld`, `cp`, `dd`, `gzip`, `md5`, `perl`… solo usan libSystem (y quizás libncurses/libz). Comprueba con `otool -L` que todas sus bibliotecas están **completas** en tu registro de parches.
+- **En el gancho de `thread_setrun`:** si `task` es de un proceso de la lista blanca → **no** atar. El nombre sale de `task->bsd_info` → `proc->p_comm` (offsets con `otool` de `_proc_name` o de `_current_proc`). Mejor aún, **deshaz el atado** si ya estaba (`bound_processor = 0`) para los hilos de esos procesos.
+- **Cuidado con `fork`+`exec`:** el hijo hereda el nombre del padre hasta el `exec`. Comprueba el nombre en cada `thread_setrun` (no en la creación), así el atado cambia en cuanto el proceso hace `exec`.
+- **Medidas con la lista blanca:** bucle `sh` 1 frente a 2 a la vez (esperado: 2 a la vez ≈ lo mismo que 1); `make -j2` de un proyecto pequeño; `gzip` de 100 MB mientras corre otro. Compáralas con UP.
+
+## 96.3 Pregunta 3: arranque SMP temprano
+- Sí, pruébalo: los cuelgues del arranque temprano (smp33-50) tenían causas ya corregidas (IPI, OHCI/SDHC, atómicos, PTE).
+- **Protección del disco** (lo que dañó 24 binarios):
+  - antes de cada prueba, `fsck_hfs -n` (en UP, o con la SD montada en el Mac);
+  - crea un fichero **testigo** grande con suma conocida (`md5`) y compruébalo tras cada sesión SMP;
+  - vigila `grep WiiSDHC /var/log/system.log`: **cualquier** EIO → volver a UP enseguida;
+  - reconstruye **todo** el mkext desde fuentes **verificadas** (compara con `git`/checksums; algunas estaban dañadas) antes de seguir.
+- Mantén el **arranque tardío como opción** (`WiiSMPLateStart`) para recuperar rápido si el temprano da guerra.
+
+## 96.4 Orden
+1. Reconstruir el mkext desde fuentes verificadas; `fsck_hfs -n` + testigo `md5`.
+2. **Lista blanca** en el gancho de `thread_setrun` + medidas (96.2).
+3. Arranque SMP temprano con la vigilancia de 96.3.
+4. **Islas de stubs** (96.1): primero el inventario de huecos y la prueba con **una** isla y **una** biblioteca (p. ej. CoreFoundation) antes de generalizar.
