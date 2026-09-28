@@ -71,7 +71,8 @@
 > - **Partes 95–96** — **SMP estable con userland sano** (cowtest, gcc, cp/cmp, 0 errores de SD). Disco dañado por pruebas antiguas: reparado y con copia. Siguiente: (1) **lista blanca** de procesos desatados para medir ya (96.2); (2) **islas de stubs** en la región compartida, cargadas como dependencia de libSystem (96.1); (3) arranque SMP temprano con vigilancia del disco (96.3).
 > - **Partes 97–98** — panic tras ~40 min: un enlace de lista libre (caché de pilas) resucitado con basura, y los dos núcleos fallando a la vez en direcciones del kernel sin mapear. Más probable: **`dcbz` que no anula la copia del otro núcleo** (a). (b) y (c) descartadas por el código. Prueba de `dcbz` con turnos por atómicos y plan para quitar `dcbz` con 2-3 parches de una instrucción (98.3).
 > - **Partes 99–100** — smp60: con la **L2 del núcleo 1 encendida**, **2× real** (lista blanca). El fallo de "primera ejecución"/`$(date)` vacío es un **alias de página entre procesos que también pasa en UP**: `free()` recorre la lista de zonas de malloc de **otro** proceso (con Foundation). La COW del `__DATA` compartido de XNU es correcta en el código (100.2); el alias está por debajo de la VM: traducción vieja de un **pmap reciclado con el mismo VSID** (A) o página física repartida dos veces (B). Pruebas: Wiintosh limpio, `alias.c`, A/B `free_pmap_max=-1`, escaneo de la tabla hash (100.4). Stubs aplazados.
-> - Si algo se contradice, vale la parte **más reciente** (100 > 99 > 98 > 97 > 96 > 95 > 94 > 93 > 92 > 91 > 90 > 89 > 88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 101–102** — el fallo de userland aparece **solo cuando un hilo de usuario migra** entre núcleos; con afinidad fija (smp62b) 2× y 1 h limpia. En xnu-792 los SR, la ventana de copyin, `pthread_self`, la reserva y la FPU se renuevan al migrar; **el TLB no** (XNU confía en que el `tlbie` llegue a todos los núcleos). Sospechoso: el `tlbie` de un núcleo no invalida el TLB del otro (¿faltan bits de HID5 que ponen NetBSD/Linux/Nintendo? tenemos 0x80000000). Prueba decisiva tlbtest, HID5 `|= 0x67FDC000`, apaño de vaciar el TLB en `pmap_switch`, gprtest; afinidad **por tarea** (102).
+> - Si algo se contradice, vale la parte **más reciente** (102 > 101 > 100 > 99 > 98 > 97 > 96 > 95 > 94 > 93 > 92 > 91 > 90 > 89 > 88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -88,14 +89,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 102, 101, 100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 100.6** (congelar smp60; revalidar con la L2 del núcleo 1; cazar el alias de páginas entre procesos: Wiintosh limpio, `alias.c`, `free_pmap_max=-1`, escaneo de la tabla hash).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 102.5** (tlbtest: ¿el `tlbie` de un núcleo invalida el TLB del otro?; HID5; vaciar el TLB en `pmap_switch`; afinidad por tarea).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -5140,3 +5141,217 @@ dd if=copia bs=4096 skip=<offset/4096> count=1 2>/dev/null | hexdump -C | head -
 5. **A/B `free_pmap_max = -1` (100.4.C)** con las mismas medidas, más `vm_stat` y `hwSteals`.
 6. Si no está claro: **escaneo de la tabla hash (100.4.D)**. Y si vuelve un `cp=MAL`, la forma del daño (100.4.E).
 7. Stubs de userland (96.1) y arranque temprano (96.3), solo cuando el alias esté explicado.
+
+---
+
+# PARTE 101 — (informe del Mac) El fallo de userland es la MIGRACIÓN de hilos entre núcleos; con afinidad fija, 2× y estable
+
+- **100.6 en limpio** (clean60 = nuestros kexts con `WiiSMP=false`; el 0.5.2 original no enumera el Redmi):
+  - `grolbp`/`hdxml2manxml` revientan **50/50 también en UP**: es un fallo fijo y aparte, no sirve como prueba;
+  - `$(date)` ×2000: 0 vacíos; `alias`: 0. Con 2 núcleos (smp60), `alias` y `date` también dan 0.
+- **Estrés con apps Cocoa** (TextEdit, Calculadora, Vista Previa + `alias` + `$(date)`), contando volcados:
+
+| Configuración | Rondas | Fallos |
+|---|---|---|
+| clean60 (UP) | 12 | 0 |
+| smp60, lista blanca libre | 12+12 | 2 volcados + ráfaga "not malloced" con punteros ASCII (":34 ", " acu", "9\n10") |
+| smp61, `free_pmap_max=-1` (vía plist; `/dev/kmem` no deja escribir) | 24 | 5 volcados → (A) de 100.3 descartado |
+| lista blanca OFF (todo al núcleo 0) | 24 | 0 |
+| lista blanca atada SIEMPRE al núcleo 1 | 24 | 0 |
+| smp62b: afinidad fija (por turnos la primera vez, sin migrar nunca) | 24 | 0 |
+
+- Todos los volcados son de `bash`: `free` → zona → 0x92BC1124 (≈`-[NSObject class]`) → trap de `__NSRaiseError` 0x92BFF07C.
+- **fptest** (8 × 60 000 rondas con f0–f31 y `sched_yield`): 0 malas → no es la FPU perezosa.
+- **Conclusión del Mac:** el fallo solo aparece cuando un hilo de usuario **migra** entre núcleos.
+- **smp62b:** bucle `sh` 1 solo 4 s / 2 a la vez 4 s (2×). 1 hora de carga 60/60, 0 errores de SDHC, 0 volcados. Claves del plist: `WiiFreePmapMax`, `WiiSMPWhitelist`, `WiiSMPWhitelistCore` (0 libre, 1 núcleo 1, 2 afinidad fija).
+- **Preguntas:** (1) ¿qué estado por CPU de un hilo o pmap de usuario no se invalida al migrar en xnu-792 PPC (caché de segmentos, `ppUserPmap`, `validSegs`, `ppInvSeg`, `pmapCCtl`/`pmapSegCache`, SR de la región compartida…)? ¿cómo sabe `switchSegs` que otro núcleo cambió los segmentos? (2) ¿forzar la recarga de los 16 SR en cada cambio de contexto y repetir sin afinidad? (3) mientras tanto, ¿afinidad fija para todos los procesos de usuario?
+
+---
+
+# PARTE 102 — Respuesta: lo que no se renueva al migrar es el TLB del otro núcleo; los SR están bien. Prueba decisiva y apaño
+
+## 102.1 Qué estado por CPU tiene un hilo de usuario en xnu-792 PPC, uno por uno
+| Estado | Cómo lo trata XNU al cambiar de núcleo | ¿Puede quedarse viejo? |
+|---|---|---|
+| **Segment registers de usuario** | Se recargan **en cada vuelta a modo usuario**: la salida de excepción llama a `switchSegs` (`lowmem_vectors.s:3070, 3186, 3413`), que carga los SR desde la caché de segmentos del pmap actual (`hw_vm.s:5472-5601`, `ssg32Enter`) e invalida los que ya no valen (`validSegs`). Solo se ahorra el trabajo si no cambia el modo usuario/núcleo (`ppInvSeg`/`ppCurSeg`, l.5474-5499). | No. Además el VSID es fijo por (espacio, segmento), así que un SR "viejo" tendría el mismo valor. |
+| **Anidado de la región compartida (0x9)** | `pmap_unnest` marca `ppInvSeg = 1` en **todos** los núcleos que usan ese pmap y les manda `SIGPcpureq/CPRQsegload` (`pmap.c:1755-1778`). La 0xA no se anida (100.2). | No. |
+| **Ventana de copyin/copyout (UMW)** | `Switch_context` copia `umwSpace`/`umwRelo` del hilo al `ppUMWmp` del núcleo nuevo (`cswtch.s:133-150`); al salir de un hilo se borran los SR de la ventana (`pcb.c:188-192`) y el bit `umwSwitchAway` obliga a recargar (`pmap.c:1897`, `hw_exception.s:1379, 1429`). | No. |
+| **`pthread_self` (UAW)** | En G3 se lee con la trampa rápida 0x7FF2 desde `per_proc.Uassist` (`lowmem_vectors.s:888-895`), que se carga en cada cambio (`cswtch.s:143-144`, `pcb.c:650`). | No. |
+| **Reserva `lwarx`** | Se mata en cada salida de excepción (`lowmem_vectors.s:3200-3210`). | No. |
+| **FPU** | Perezosa; tu fptest da 0 fallos. | No (medido). |
+| **TLB** | **XNU no lo vacía nunca** al cambiar de contexto ni al migrar: las entradas llevan VSID y XNU confía en que cada `tlbie` llegue a **todos** los núcleos (`mapInvPte32`, `hw_rem_map`, `handlePF`… + `tlbsync` si `pfSMPcap`, p. ej. `hw_vm.s:1002-1024` y `4340-4368`). | **Sí**, si en Espresso el `tlbie` de un núcleo no invalida el TLB del otro. |
+
+**Conclusión:** lo único que se arrastra de un núcleo a otro sin que XNU lo renueve es **el TLB**. Encaja con todo lo que has medido.
+
+## 102.2 Por qué el TLB explica exactamente tus datos [NO VERIFICADO]
+- **Un caso concreto (`bash` + `$(date)`):**
+  1. `bash` corre en el núcleo 1; su TLB guarda "página de datos de libSystem (V) → física P, escritura".
+  2. `bash` pasa al núcleo 0 y hace `fork`. XNU le quita la escritura a V (`vm_map_fork` → `pmap_protect`), con un `tlbie V` que **no llega** al núcleo 1.
+  3. Padre e hijo escriben (COW): el padre pasa a una página R y el hijo a otra Q. P queda libre y la VM se la da a otro proceso (el Finder, por ejemplo: lista LIFO).
+  4. `bash` vuelve al núcleo 1, cuyo TLB **sigue diciendo V → P**. Lee (y escribe) **la página del Finder**: su lista de zonas de malloc con la zona de Foundation. Muere en `free`.
+  - Lo mismo con páginas del heap reutilizadas como búferes de texto → los punteros ASCII ":34 ", " acu", "9\n10" (trozos de salida de `date`/`cal`).
+- **Por qué la afinidad fija lo tapa:** si un proceso solo corre en un núcleo, su VSID solo vive en el TLB de ese núcleo, y los `tlbie` los hace ese mismo núcleo (sus propios `fork`, COW, `munmap`) → basta con el `tlbie` local. Lo mismo con "todo al núcleo 0" o "siempre al núcleo 1".
+- **Por qué `free_pmap_max=-1` no cambió nada:** la entrada vieja es del **mismo** proceso que migra (su propio VSID), no de un VSID reciclado.
+- **Relación con el panic de la Parte 97** [hipótesis]: las pilas del kernel se liberan y se vuelven a pedir (`stack_collect` → VM). Una entrada vieja del TLB del otro núcleo para una dirección del kernel reutilizada daría justo "enlace de lista resucitado" y "los dos núcleos fallan en direcciones del kernel". Es mucho más raro porque el kernel cambia pocos mapeos.
+- **Qué lo pone en duda:** en la Parte 83 activar `pfSMPcap` (`tlbsync`) sí mejoró las cosas. Eso sugiere que la difusión funciona **al menos a veces** (o solo con ciertos bits de HID). Por eso hay que medirlo (102.3.A) antes de nada.
+- **Diferencia con NetBSD y Linux:** los dos confían en el `tlbie` difundido (NetBSD `oea/pmap.c:745-812`, `TLBIE` + `TLBSYNC`; Linux `mm/book3s32/nohash_low.S:16-40`), pero **ponen bits de HID4/HID5 que nosotros no ponemos**:
+  - NetBSD `oea/cpu_subr.c:826-835`: `HID4 = H4A|L2FM_64B|BPD_4|SBE|LPE|ST0|DBP|L2MUM|L2_CCFI` y `HID5 |= 0x67FDC000`;
+  - linux-wiiu `cpu_setup_6xx.S:282-291`: `HID4 = 0xB3B00000` y `HID5 |= 0x67FDC000` ("el bit 0x08000000 cuelga la MMU");
+  - Nintendo (Parte 43): `HID5 |= 0x7FFDC000`.
+  - Nosotros medimos **HID5 = 0x80000000** en el núcleo 0 (Parte 29) y el núcleo 1 copia sus HID. Los bits 0x3FFDC000 de HID5 no están documentados; alguno podría ser justo "atender los `tlbie` de otro núcleo" o la coherencia de la búsqueda en la tabla hash (lo que nos obligó a los `dcbf` de las PTE en la Parte 90).
+
+## 102.3 Pregunta 2: recargar los SR no serviría. Esto sí
+Los SR ya se recargan en cada vuelta a usuario (102.1), y con el mismo VSID darían la misma traducción. Lo que hay que medir y vaciar es el **TLB**.
+
+### A. Prueba decisiva: ¿un `tlbie` del núcleo 0 invalida el TLB del núcleo 1?
+Con dos hilos atados, uno por núcleo, y turnos con `OSIncrementAtomic`/`OSAddAtomic(0)` como en 98.4.A:
+```c
+/* preparación */
+a1 = IOMallocAligned(4096, 4096);  rellenar con 0x11111111;  P1 = pmap_find_phys(kernel_pmap, a1);
+a2 = IOMallocAligned(4096, 4096);  rellenar con 0x22222222;  P2 = pmap_find_phys(kernel_pmap, a2);
+vm_allocate(kernel_map, &V, 4096, VM_FLAGS_ANYWHERE);          /* dirección virtual libre, sin página */
+/* cada ronda (N = 100 000) */
+A (núcleo 0): pmap_enter(kernel_pmap, V, P1, VM_PROT_READ|VM_PROT_WRITE, 0, TRUE);   turno++
+B (núcleo 1): x = *(volatile UInt32 *)V;   /* debe ser 0x11111111: carga V→P1 en el TLB del núcleo 1 */   turno++
+A (núcleo 0): pmap_remove(kernel_pmap, V, V + 4096);          /* PTE inválida + tlbie + tlbsync de XNU */
+              pmap_enter(kernel_pmap, V, P2, VM_PROT_READ|VM_PROT_WRITE, 0, TRUE);   turno++
+B (núcleo 1): y = *(volatile UInt32 *)V;   if (y != 0x22222222) viejos++;            turno++
+A (núcleo 0): pmap_remove(kernel_pmap, V, V + 4096);          turno++
+```
+- Repite con los papeles cambiados (el núcleo 1 cambia el mapeo y el 0 lee).
+- **Variante B′:** justo antes de la segunda lectura, el núcleo 1 hace un `tlbie V` local (con el candado `tlbieLock` en **0x5180**, `lowglobals.h:70`).
+- **Cómo leerlo:**
+  - `viejos = 0` → el `tlbie` sí llega; descarta el TLB y ve a D.
+  - `viejos > 0`, y con B′ baja a 0 → **el TLB del otro núcleo no se invalida** (confirmado).
+  - `viejos > 0` también con B′ → el núcleo 1 recarga la traducción de una **PTE vieja en memoria**: falta algún `dcbf` de PTE. Revisa sobre todo `hpfNipBM` (`hw_vm.s:4336`, la PTE que se roba en `handlePF`) y los 8 `stw r0,0x00…0x38(r5)` de `hrmBInv32` (`hw_vm.s:954-975`, mapeos de bloque). No sé si están entre tus 15.
+
+### B. Si A falla: los bits de HID5 (y de HID4)
+1. Lee y apunta **HID0, HID2 (920), HID4 (1011), HID5 (944) y L2CR** de los dos núcleos (hilos atados).
+2. Nueva clave de arranque (p. ej. `WiiHID5Or = 0x67FDC000`, el valor de NetBSD/Linux, **no** el de Nintendo por el bit 0x08000000) aplicada **en el arranque**: en `WiiPE::start` para el núcleo 0 y en el trampolín/`initCPU` para el núcleo 1, **antes** de encender la L2. No en caliente: incluye bits de L2 (`L2CR`, `L2CR_L2SIZ` = 0x00800000/0x01000000).
+3. Repite A. Si `viejos` pasa a 0, repite el estrés en modo libre.
+4. HID4 como NetBSD, **sin SBE** (salvo que antes pongas a 0 los BAT 4–7, SPR 560–575): `H4A|L2FM_64B|BPD_4|LPE|ST0|DBP|L2MUM|L2_CCFI`. Solo si con HID5 no basta.
+
+### C. Apaño para confirmarlo con la carga real (y plan B si no hay bit de HID)
+Vaciar el TLB **del núcleo que cambia de pmap**: gancho en la entrada de `_pmap_switch` (`pmap.c:1622`, se llama al cambiar a otro espacio de direcciones, `pcb.c:184` y `645`). Es la misma rutina que usa XNU en `cacheInit` (`machine_routines_asm.s:1193-1226`):
+```
+stub:   li      r5,0x5180          ; tlbieLock (lowGlo)
+1:      lwarx   r6,0,r5
+        cmpwi   r6,0
+        bne-    1b
+        li      r6,1
+        dcbf    0,r5               ; erratum
+        stwcx.  r6,0,r5
+        bne-    1b
+        li      r6,128             ; 128 clases, como cacheInit
+        mtctr   r6
+        li      r6,0
+2:      tlbie   r6
+        addi    r6,r6,0x1000
+        bdnz    2b
+        sync
+        eieio
+        tlbsync
+        sync
+        isync
+        li      r6,0
+        stw     r6,0(r5)           ; soltar tlbieLock
+        <1ª instrucción original de _pmap_switch>
+        b       _pmap_switch+4
+```
+- r3 (el pmap) no se toca; r5, r6, CTR y r0 son volátiles.
+- Con el gancho, repite el estrés **sin afinidad** (`WiiSMPWhitelistCore=0`). Si los volcados desaparecen → confirmado, y te sirve de apaño.
+- **Límites del apaño:** no cubre dos hilos del **mismo** proceso a la vez en los dos núcleos, ni los cambios en mapeos del kernel. Para eso hace falta que el `tlbie` llegue (B) o afinidad **por tarea** (102.4).
+
+### D. Descarte barato: ¿se corrompen los registros al migrar?
+Los GPR se guardan en una savearea (con `dcbz` en modo real, `lowmem_vectors.s:1328-1469`) y se recuperan en el otro núcleo. fptest ya cubre la FPU; esto cubre r14–r31.
+```
+; regs.s — unsigned regloop(unsigned seed, unsigned iters, unsigned *snap)
+        .text
+        .align 2
+        .globl _regloop
+_regloop:
+        mflr    r0
+        stw     r0,8(r1)
+        stmw    r13,-76(r1)        ; zona roja (224 bytes)
+        mr      r12,r4
+        li      r11,0
+        mr      r13,r5
+L_fill: addi r14,r3,14
+        addi r15,r3,15
+        addi r16,r3,16
+        addi r17,r3,17
+        addi r18,r3,18
+        addi r19,r3,19
+        addi r20,r3,20
+        addi r21,r3,21
+        addi r22,r3,22
+        addi r23,r3,23
+        addi r24,r3,24
+        addi r25,r3,25
+        addi r26,r3,26
+        addi r27,r3,27
+        addi r28,r3,28
+        addi r29,r3,29
+        addi r30,r3,30
+        addi r31,r3,31
+L_loop: li      r10,2000
+        mtctr   r10
+L_spin: bdnz    L_spin
+        addi r10,r3,14
+        cmpw r14,r10
+        bne- L_bad
+        ; … igual con r15…r31 (addi r10,r3,k ; cmpw rk,r10 ; bne- L_bad)
+        addic.  r12,r12,-1
+        bne+    L_loop
+L_out:  mr      r3,r11
+        lmw     r13,-76(r1)
+        lwz     r0,8(r1)
+        mtlr    r0
+        blr
+L_bad:  cmpwi   r11,0
+        bne     L_skip
+        stmw    r14,0(r13)         ; foto del primer fallo
+L_skip: addi    r11,r11,1
+        addic.  r12,r12,-1
+        bne+    L_fill
+        b       L_out
+```
+```c
+/* gprtest.c — cc -O -o gprtest gprtest.c regs.s ; añádelo a la lista blanca en modo libre */
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+unsigned regloop(unsigned seed, unsigned iters, unsigned *snap);
+int main(int argc, char **argv)
+{
+    unsigned snap[18], i, n;
+    unsigned seed = 0x5A000000u | ((getpid() & 0xFFFF) << 8);
+    unsigned iters = (argc > 1) ? strtoul(argv[1], 0, 0) : 2000000;
+    n = regloop(seed, iters, snap);
+    if (n) {
+        printf("GPR MAL pid=%d fallos=%u base=%08x:", getpid(), n, seed);
+        for (i = 0; i < 18; i++) printf(" r%u=%08x", 14 + i, snap[i]);
+        printf("\n");
+    }
+    return n != 0;
+}
+```
+- Lanza 4 a la vez, en modo libre, con la misma carga Cocoa.
+- **0 fallos** → los registros viajan bien (refuerza el TLB).
+- **Fallos** → mira de dónde salen los valores ajenos: savearea vieja en el otro núcleo (el `dcbz` de `lowmem_vectors.s` en modo real).
+
+## 102.4 Pregunta 3: afinidad fija para todos, todavía no
+- **Afinidad por tarea, no por hilo.** Si el TLB no se invalida entre núcleos, dos hilos del **mismo** proceso en núcleos distintos siguen expuestos (uno cambia un mapeo y el otro conserva la entrada vieja). Elige el núcleo una vez por **task** (guárdalo junto al puntero de la tarea, +0x25C del hilo) y úsalo para todos sus hilos.
+- **Cocoa y el resto, en el núcleo 0 de momento.** Sus frameworks tienen `stwcx.` sin parchear (las islas de 96.1 no están hechas) y comparten memoria con el WindowServer, `notifyd`, etc. Con procesos repartidos en los dos núcleos, un atómico sobre memoria compartida entre dos procesos cruza núcleos → vuelve el erratum.
+- **Lo que sí puedes hacer ya:** lista blanca con afinidad **por tarea** (smp62b ya da 2× y 1 h limpia), y ampliar la lista solo con binarios cuyas bibliotecas estén 100 % parcheadas.
+- Cuando 102.3.A/B/C esté resuelto: modo libre para la lista blanca, y luego las islas de stubs (96.1) para soltar al resto.
+- **Aparte:** `grolbp`/`hdxml2manxml` fallan siempre, también en UP limpio. Es otro problema. Comprueba si el binario está dañado por los EIO antiguos: `lsbom -p fc /Library/Receipts/BSD.pkg/Contents/Archive.bom | grep -E 'grolbp|hdxml2manxml'` frente a `cksum` del fichero (el recibo puede ser otro `.pkg` si no aparece en BSD.pkg).
+
+## 102.5 Orden
+1. Deja smp62b (afinidad fija) como configuración de uso, pasándola a **por tarea**.
+2. Lee HID0/HID2/HID4/HID5/L2CR de los dos núcleos (102.3.B.1).
+3. **Prueba A (tlbtest)** en los dos sentidos, con y sin la variante B′.
+4. Si falla: HID5 `|= 0x67FDC000` en el arranque (102.3.B) y repite A. Si sigue fallando con B′, busca la PTE sin `dcbf` (`hpfNipBM`, `hrmBInv32`).
+5. Gancho de vaciado de TLB en `_pmap_switch` (102.3.C) + estrés **sin afinidad** (24 rondas como en la Parte 101).
+6. gprtest (102.3.D) en modo libre, como descarte de registros.
+7. Con el TLB resuelto: modo libre para la lista blanca → islas de stubs (96.1) → arranque temprano (96.3).
