@@ -69,7 +69,8 @@
 > - **Partes 91–92** — con `dcbf` en las PTE: **COW y stdio arreglados** (cowtest 1000/1000). Queda un SIGSEGV en la **primera** ejecución de algunos binarios y al crear ficheros nuevos. Pasos: **core dump + gdb** para ver el PC (92.1), prueba de coherencia de **`dcbz`** entre núcleos (92.2), atar el workloop de SDHC al núcleo 0 como descarte (92.3), y cambiar los 2 `dcbst` restantes a `dcbf`.
 > - **Partes 93–94** — los procesos que mueren acaban todos en el `trap` de `__NSRaiseError` (Foundation), incluso `bash`. Encaja con una **página con identidad equivocada** (datos o punteros de otra biblioteca). Faltan por tapar las **revalidaciones de PTE** de `hw_walk_phys`, `hw_protect`, `hw_test_rc` y `hw_test_rc_gv` (94.1). Confirmar con la cadena de llamadas del core y el puntero usado (94.2), y comparar en UP (94.3).
 > - **Partes 95–96** — **SMP estable con userland sano** (cowtest, gcc, cp/cmp, 0 errores de SD). Disco dañado por pruebas antiguas: reparado y con copia. Siguiente: (1) **lista blanca** de procesos desatados para medir ya (96.2); (2) **islas de stubs** en la región compartida, cargadas como dependencia de libSystem (96.1); (3) arranque SMP temprano con vigilancia del disco (96.3).
-> - Si algo se contradice, vale la parte **más reciente** (96 > 95 > 94 > 93 > 92 > 91 > 90 > 89 > 88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 97–98** — panic tras ~40 min: un enlace de lista libre (caché de pilas) resucitado con basura, y los dos núcleos fallando a la vez en direcciones del kernel sin mapear. Más probable: **`dcbz` que no anula la copia del otro núcleo** (a). (b) y (c) descartadas por el código. Prueba de `dcbz` con turnos por atómicos y plan para quitar `dcbz` con 2-3 parches de una instrucción (98.3).
+> - Si algo se contradice, vale la parte **más reciente** (98 > 97 > 96 > 95 > 94 > 93 > 92 > 91 > 90 > 89 > 88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -86,14 +87,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 96.4** (lista blanca + medidas; islas de stubs; arranque temprano).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 98.4** (prueba de dcbz bien sincronizada; quitar dcbz de bzero/pmap_zero_page/copias).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -4883,3 +4884,56 @@ Que se agotaran los tiempos de la sincronización por turnos sugiere que el **fl
 2. **Lista blanca** en el gancho de `thread_setrun` + medidas (96.2).
 3. Arranque SMP temprano con la vigilancia de 96.3.
 4. **Islas de stubs** (96.1): primero el inventario de huecos y la prueba con **una** isla y **una** biblioteca (p. ej. CoreFoundation) antes de generalizar.
+
+
+---
+
+# PARTE 97 — (informe del Mac) Panic tras ~40 minutos: caché de pilas del kernel corrupta
+
+- **Núcleo 1:** DSI en `machine_stack_attach+0x28` desde `stack_alloc_try+0xC0` (`thread_invoke` ← `thread_block_reason` ← `ast_taken`), **DAR = 0x3C4843A8**, DSISR 0x40000000 (sin traducción).
+- **Núcleo 0**, a la vez: fallo en `thread_call_enter1` (desde IOUSBHIDDriver/IOUSBFamily/WiiUSB en un workloop), **DAR = 0x3C584000**, DSISR 0x42000000 (sin traducción, escritura).
+- `stack_alloc_try` usa la caché de pilas por procesador (`processor+0x4B8`); el enlace al siguiente está en la **última palabra de la pila** (`stack+0x3FFC`). Ese enlace era basura.
+- Estado previo: 40 min estable. Userland atado al núcleo 0 (la lista blanca no estaba instalada).
+
+---
+
+# PARTE 98 — Respuesta: un enlace "resucitado"; el sospechoso es `dcbz`
+
+## 98.1 Descartes por el código (xnu-792 `kern/stack.c`)
+- **(b) No:** la caché de pilas por procesador **solo la toca su propio núcleo** y siempre a `splsched`. `stack_free` (l.146-175), `stack_free_stack` (l.177-203) y `stack_alloc_try` (l.213-248) usan `PROCESSOR_DATA(current_processor(), stack_cache)` con las interrupciones apagadas. `stack_collect` solo toca la lista **global** bajo `stack_lock`. No hay acceso cruzado.
+- **(c) No:** en ese código no hay `lwarx`/`stwcx.`. Usa `simple_lock` (ya con `dcbf`) para la lista global y accesos normales para la caché local.
+- **Lo que sí dice el panic:** dos núcleos fallan **a la vez** con "sin traducción" en **la misma zona** del kernel (0x3C48xxxx y 0x3C58xxxx). No es un puntero suelto: son **estructuras liberadas o recicladas que siguen en uso**. Un enlace de lista libre vuelve con un valor viejo (la pila "siguiente" ya liberada y devuelta a la VM por `stack_collect`), y el `thread_call` del núcleo 0 apunta a memoria ya liberada.
+- Es la firma de **datos viejos que reaparecen** en memoria: una línea de caché con contenido antiguo que se escribe **después** de otra más nueva.
+
+## 98.2 Por qué `dcbz` (a) encaja
+- `dcbz` crea en la caché una línea a ceros **sin leer memoria** y la marca modificada. En un sistema coherente debe **anular (kill)** la copia del otro núcleo. Si en Espresso no la anula siempre, como ya vimos con `dcbst`, quedan **dos copias modificadas** de la misma línea. La que se desaloje la última gana en memoria y **resucita datos viejos**: enlaces de listas libres, contadores o punteros.
+- El kernel usa `dcbz` justo en lo que se recicla: **`bzero`/`memset`** (`bzero.s:129-177`, bucle `bz_dcbz32`), **`pmap_zero_page`** (`movc.s:44-80`), las **copias** (`phys_copy` `movc.s:193`, `bcopy.s`), las **saveareas** (`cswtch.s`, `lowmem_vectors.s`) y los bloques de `mapping` (`hw_vm.s`). Un `kalloc`+`bzero` en un núcleo sobre memoria que el otro acaba de liberar (con el enlace de lista libre en caché) es el caso típico.
+- Encaja con que aparezca **tras muchos minutos** (hace falta una coincidencia de desalojos) y con los fallos raros anteriores.
+
+## 98.3 Pregunta 2: quitar `dcbz` con muy pocos parches
+No hace falta un stub por sitio:
+1. **`_bzero` → `_bzero_nc`:** `bzero.s` ya tiene `bzero_nc` (l.59-66: *"we must also avoid dcbz"*), con los mismos argumentos (dirección, longitud). Cambia la **primera instrucción de `_bzero`** por `b _bzero_nc`. `_bzero_phys` llama a `bzero` (l.44-52), así que queda cubierta.
+   - **`_memset`** con valor 0 entra por el mismo camino; con otro valor no usa `dcbz`. Mira con `otool` que `memset` no salte al bucle `dcbz` con valor 0; si lo hace, desvía también ese salto a `bzero_nc`.
+2. **`_pmap_zero_page` → `bzero_phys`:** un stub de 4 palabras en la entrada: `slwi r4,r3,12 ; li r3,0 ; li r5,4096 ; b _bzero_phys` (salto de cola; el LR sigue siendo el del llamador).
+3. **Copias (`phys_copy`, `bcopy`, `memcpy`):** ahí `dcbz` solo sirve para **no leer** la línea de destino antes de sobrescribirla entera (`movc.s:193` *"avoid read of dest line"*). Cambiar ese `dcbz` por **`nop`** es correcto (el bucle escribe los 32 bytes igualmente) y no necesita stub. Revisa cada `dcbz` de `bcopy.s` con el mismo criterio.
+4. **Saveareas y `mapping` (`cswtch.s`, `lowmem_vectors.s`, `hw_vm.s`):** mira cada sitio.
+   - Si tras el `dcbz` se **escriben los 32 bytes** de la línea → `nop`.
+   - Si se confía en que queden ceros → stub con 8 `stw` de 0 (o déjalos para una segunda fase, porque las saveareas suelen reciclarse en el mismo núcleo).
+- Con 1-3 cubres casi todo el uso general con **2 instrucciones cambiadas + 1 stub de 4 palabras + varios `nop`**.
+
+## 98.4 Pregunta 1: cómo verificarlo rápido
+**A. Prueba de `dcbz` bien sincronizada** (la anterior falló por los turnos). Usa los atómicos del kernel, que ya son correctos con `dcbf`, para los turnos:
+- `turno` es una palabra que se modifica con `OSIncrementAtomic` y se lee con `OSAddAtomic(0, &turno)`. Esa lectura pasa por `lwarx`, así que es coherente.
+- Bucle (dos hilos atados, línea X de 32 bytes alineada, en otra línea distinta de `turno`):
+  1. el núcleo 1 escribe el patrón `0xAAAAAAAA` en X[0..7] → `OSIncrementAtomic(&turno)`;
+  2. el núcleo 0 espera `turno` impar → `dcbz X` → escribe `0x55` en X[1] → `OSIncrementAtomic(&turno)`;
+  3. el núcleo 1 espera `turno` par → **lee X[0] y X[1]**: debe ver `0` y `0x55`. Si ve `0xAAAAAAAA`, el `dcbz` no anuló su copia.
+  - Tras 1 000 000 de rondas, cuenta los fallos; repite al revés (el `dcbz` en el núcleo 1).
+  - Variante de comprobación: después de todo, `dcbf X` en los dos y leer X; debe ser `0, 0x55, 0…`.
+**B. A la vez, sin esperar a la prueba:** aplica 98.3 (1-3) y deja el sistema **una hora** con carga (cowtest, gcc en bucle, cp+cmp, USB/red). Si el panic de las ~40 min no vuelve, confirma la hipótesis en la práctica.
+
+## 98.5 Orden
+1. Prueba de `dcbz` con turnos por atómicos (98.4.A).
+2. Parches 98.3 (bzero → bzero_nc, pmap_zero_page → bzero_phys, `dcbz` de copias → `nop`), lo pruebe o no la 98.4.A. Son baratos y seguros.
+3. Una hora de carga con 2 núcleos. Revisa los `dcbz` de saveareas y `mapping` solo si vuelve un panic parecido.
+4. Luego, lista blanca y medidas (96.2).
