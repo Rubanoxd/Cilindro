@@ -1,0 +1,29 @@
+diff --git a/rpcs3/Emu/RSX/RSXThread.cpp b/rpcs3/Emu/RSX/RSXThread.cpp
+index cfa735f..17b551f 100644
+--- a/rpcs3/Emu/RSX/RSXThread.cpp
++++ b/rpcs3/Emu/RSX/RSXThread.cpp
+@@ -2782,6 +2782,12 @@ namespace rsx
+ 				break;
+ 			}
+ 		}
++		else if (type == CELL_GCM_ZPASS_PIXEL_CNT)
++		{
++			// Reporting 0 makes games that cull on occlusion results (e.g. Uncharted 2) drop all geometry.
++			// Report everything as visible instead, without waiting on the host GPU.
++			value = static_cast<u32>(g_cfg.video.zcull_fake_zpass_value.get());
++		}
+ 
+ 		rsx::reservation_lock<true> lock(sink, 16);
+ 		vm::_ptr<atomic_t<CellGcmReportData>>(sink)->store({timestamp(), value, 0});
+diff --git a/rpcs3/Emu/system_config.h b/rpcs3/Emu/system_config.h
+index 4e0a2e6..44f3eb5 100644
+--- a/rpcs3/Emu/system_config.h
++++ b/rpcs3/Emu/system_config.h
+@@ -143,6 +143,7 @@ struct cfg_root : cfg::node
+ 		cfg::_bool strict_rendering_mode{ this, "Strict Rendering Mode" };
+ 		cfg::_enum<framebuffer_aliasing_bias> fb_aliasing_bias{ this, "Framebuffer Aliasing Heuristic Bias", framebuffer_aliasing_bias::_auto, true };
+ 		cfg::_bool disable_zcull_queries{ this, "Disable ZCull Occlusion Queries", false, true };
++		cfg::uint<0, 0xffffff> zcull_fake_zpass_value{ this, "ZCull Fake ZPass Value", 0, true }; // With queries disabled, report this many passing pixels instead of 0 (0 = off)
+ 		cfg::_bool disable_video_output{ this, "Disable Video Output", false, true };
+ 		cfg::_bool disable_vertex_cache{ this, "Disable Vertex Cache", false };
+ 		cfg::_bool disable_FIFO_reordering{ this, "Disable FIFO Reordering", false };

@@ -1,7 +1,9 @@
 #!/bin/sh -ex
 # Compila RPCS3 en el propio Mac (M4), igual que la build oficial pero con:
 #   - USE_NATIVE_INSTRUCTIONS=ON  (la oficial usa -march=armv8.4-a genérico)
-#   - opcional: parche 0001-macos-qos-workers.patch  (PATCH=1)
+#   - opcional (PATCH=1): todos los parches 000*.patch de esta carpeta
+#       0001 QoS de hilos compiladores (núcleos P para la emulación)
+#       0002 "ZCull Fake ZPass Value": con consultas ZCull desactivadas, informar píxeles visibles en vez de 0
 # Reutiliza los scripts de CI de RPCS3 (.ci/build-mac.sh + .ci/deploy-mac.sh), que ya meten
 # MoltenVK 1.4.2 "privateapi" dentro de la app, como la build oficial.
 #
@@ -24,7 +26,7 @@ git checkout -f "$REV"
 git reset --hard
 
 if [ "${PATCH:-0}" = "1" ]; then
-  git apply "$HERE/0001-macos-qos-workers.patch"
+  for p in "$HERE"/000*.patch; do git apply "$p"; echo "applied $p"; done
 fi
 
 # Instrucciones nativas del M4 en vez de armv8.4-a genérico
