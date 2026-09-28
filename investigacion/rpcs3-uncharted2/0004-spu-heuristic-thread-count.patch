@@ -1,0 +1,58 @@
+diff --git a/rpcs3/Emu/Cell/SPUThread.cpp b/rpcs3/Emu/Cell/SPUThread.cpp
+index 9c80649..0c3f1d7 100644
+--- a/rpcs3/Emu/Cell/SPUThread.cpp
++++ b/rpcs3/Emu/Cell/SPUThread.cpp
+@@ -1778,6 +1778,14 @@ u8* spu_thread::map_ls(utils::shm& shm, void* ptr)
+ 	return ls;
+ }
+ 
++// Base M-series chips (4P+6E = 10 threads) fall below the thresholds the SPU wait heuristics were tuned for (>= 12 threads).
++// Allow overriding the thread count they see, per game.
++static u32 spu_heuristic_thread_count()
++{
++	const u32 value = static_cast<u32>(g_cfg.core.spu_heuristic_thread_count.get());
++	return value ? value : utils::get_thread_count();
++}
++
+ void spu_thread::init_spu_decoder()
+ {
+ 	ensure(!jit);
+@@ -5659,7 +5667,7 @@ s64 spu_thread::get_ch_value(u32 ch)
+ 				val = static_cast<u8>(std::min<u32>(val + 1, u8{umax}));
+ 			}
+ 
+-			if (!s_is_reservation_data_checking_thread && utils::get_thread_count() >= 12)// && std::find(raddr_busy_wait_addr.begin(), raddr_busy_wait_addr.end(), raddr) != raddr_busy_wait_addr.end())
++			if (!s_is_reservation_data_checking_thread && spu_heuristic_thread_count() >= 12)// && std::find(raddr_busy_wait_addr.begin(), raddr_busy_wait_addr.end(), raddr) != raddr_busy_wait_addr.end())
+ 			{
+ 				if (s_is_reservation_data_checking_thread.compare_and_swap_test(0, 1))
+ 				{
+@@ -5767,7 +5775,7 @@ s64 spu_thread::get_ch_value(u32 ch)
+ 				// Don't be stubborn, force operating sleep if too much time has passed
+ 				const u64 time_since = get_system_time() - eventstat_evaluate_time;
+ 
+-				if (!is_reservation_data_checking_thread && time_since >= (utils::get_thread_count() >= 9 ? 50'000 : 3000))
++				if (!is_reservation_data_checking_thread && time_since >= (spu_heuristic_thread_count() >= 9 ? 50'000 : 3000))
+ 				{
+ 					spu_log.trace("SPU RdEventStat wait for 0x%x failed", raddr);
+ 					history.front() = 2;
+@@ -5833,7 +5841,7 @@ s64 spu_thread::get_ch_value(u32 ch)
+ 				{
+ 					if (u32 work_count = g_spu_work_count)
+ 					{
+-						const u32 true_free = utils::sub_saturate<u32>(utils::get_thread_count(), 10);
++						const u32 true_free = utils::sub_saturate<u32>(spu_heuristic_thread_count(), 10);
+ 
+ 						if (work_count > true_free)
+ 						{
+diff --git a/rpcs3/Emu/system_config.h b/rpcs3/Emu/system_config.h
+index 74247f6..47002a4 100644
+--- a/rpcs3/Emu/system_config.h
++++ b/rpcs3/Emu/system_config.h
+@@ -34,6 +34,7 @@ struct cfg_root : cfg::node
+ 		cfg::_int<0, 6> preferred_spu_threads{ this, "Preferred SPU Threads", 0, true }; // Number of hardware threads dedicated to heavy simultaneous spu tasks
+ 		cfg::_int<0, 16> spu_delay_penalty{ this, "SPU delay penalty", 3 }; // Number of milliseconds to block a thread if a virtual 'core' isn't free
+ 		cfg::_bool spu_loop_detection{ this, "SPU loop detection", false }; // Try to detect wait loops and trigger thread yield
++		cfg::_int<0, 64> spu_heuristic_thread_count{ this, "SPU Heuristics Host Thread Count", 0, true }; // 0 = real host thread count. Overrides the thread count used by SPU wait heuristics
+ 		cfg::_int<1, 6> max_spurs_threads{ this, "Max SPURS Threads", 6, true }; // HACK. If less then 6, max number of running SPURS threads in each thread group.
+ 		cfg::_enum<spu_block_size_type> spu_block_size{ this, "SPU Block Size", spu_block_size_type::safe };
+ 		cfg::_bool spu_accurate_dma{ this, "Accurate SPU DMA", false };
