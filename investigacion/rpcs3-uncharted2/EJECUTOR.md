@@ -10,6 +10,9 @@
   - El investigador te manda mensajes que empiezan por **`ORDEN #n`**.
   - Tú respondes siempre con un único bloque que empieza por **`INFORME #n`** (mismo número), con el formato de la sección 6.
   - Sé compacto: nada de logs enteros, solo lo que pide la orden y los extractos de la sección 5.
+- **Idiomas:** los mensajes entre Claudes (`ORDEN` / `INFORME`) van en **inglés**, que es más preciso y compacto
+  para términos técnicos. Mantén las etiquetas `ORDEN #n` / `INFORME #n` tal cual para que el usuario las reconozca.
+  **Con el usuario habla siempre en español** (instrucciones de qué hacer en pantalla, preguntas, avisos).
 - El usuario es quien juega (tú no puedes controlar el juego). Dile exactamente qué hacer en pantalla y cuánto rato,
   y pídele los números del overlay que no puedas sacar tú.
 - Reglas:
