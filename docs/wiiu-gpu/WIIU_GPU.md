@@ -72,7 +72,8 @@
 > - **Partes 97–98** — panic tras ~40 min: un enlace de lista libre (caché de pilas) resucitado con basura, y los dos núcleos fallando a la vez en direcciones del kernel sin mapear. Más probable: **`dcbz` que no anula la copia del otro núcleo** (a). (b) y (c) descartadas por el código. Prueba de `dcbz` con turnos por atómicos y plan para quitar `dcbz` con 2-3 parches de una instrucción (98.3).
 > - **Partes 99–100** — smp60: con la **L2 del núcleo 1 encendida**, **2× real** (lista blanca). El fallo de "primera ejecución"/`$(date)` vacío es un **alias de página entre procesos que también pasa en UP**: `free()` recorre la lista de zonas de malloc de **otro** proceso (con Foundation). La COW del `__DATA` compartido de XNU es correcta en el código (100.2); el alias está por debajo de la VM: traducción vieja de un **pmap reciclado con el mismo VSID** (A) o página física repartida dos veces (B). Pruebas: Wiintosh limpio, `alias.c`, A/B `free_pmap_max=-1`, escaneo de la tabla hash (100.4). Stubs aplazados.
 > - **Partes 101–102** — el fallo de userland aparece **solo cuando un hilo de usuario migra** entre núcleos; con afinidad fija (smp62b) 2× y 1 h limpia. En xnu-792 los SR, la ventana de copyin, `pthread_self`, la reserva y la FPU se renuevan al migrar; **el TLB no** (XNU confía en que el `tlbie` llegue a todos los núcleos). Sospechoso: el `tlbie` de un núcleo no invalida el TLB del otro (¿faltan bits de HID5 que ponen NetBSD/Linux/Nintendo? tenemos 0x80000000). Prueba decisiva tlbtest, HID5 `|= 0x67FDC000`, apaño de vaciar el TLB en `pmap_switch`, gprtest; afinidad **por tarea** (102).
-> - Si algo se contradice, vale la parte **más reciente** (102 > 101 > 100 > 99 > 98 > 97 > 96 > 95 > 94 > 93 > 92 > 91 > 90 > 89 > 88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 103–104** — **confirmado: en Espresso el `tlbie` no llega al otro núcleo** (tlbtest: 60–80 % de lecturas viejas; con `tlbie` local, 0), aunque HID0[ABE] está puesto. `HID5 |= 0x67FDC000` en caliente da panic. Vaciar el TLB en `pmap_switch` arregla la migración (24/24) pero cuesta 2× y no cubre hilos del mismo proceso, mapeos del kernel ni operaciones por página física. Arreglo: **derribo de TLB por software** envolviendo 8 funciones de `pmap.c` (IPI síncrona si el otro núcleo usa ese pmap, si es el kernel o si es por página física; si no, vaciado perezoso por generación en `pmap_switch`) (104.3). Explica también el panic de la Parte 97 (pilas del kernel).
+> - Si algo se contradice, vale la parte **más reciente** (104 > 103 > 102 > 101 > 100 > 99 > 98 > 97 > 96 > 95 > 94 > 93 > 92 > 91 > 90 > 89 > 88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -89,14 +90,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 102, 101, 100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 104, 103, 102, 101, 100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 102.5** (tlbtest: ¿el `tlbie` de un núcleo invalida el TLB del otro?; HID5; vaciar el TLB en `pmap_switch`; afinidad por tarea).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 104.6** (derribo de TLB por software: buzón + IPI, envolturas de `pmap_*`, vaciado perezoso por generación en `pmap_switch`; verificar con tlbtest sin B′ y mttest).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -5355,3 +5356,205 @@ int main(int argc, char **argv)
 5. Gancho de vaciado de TLB en `_pmap_switch` (102.3.C) + estrés **sin afinidad** (24 rondas como en la Parte 101).
 6. gprtest (102.3.D) en modo libre, como descarte de registros.
 7. Con el TLB resuelto: modo libre para la lista blanca → islas de stubs (96.1) → arranque temprano (96.3).
+
+---
+
+# PARTE 103 — (informe del Mac) Confirmado: el `tlbie` no se difunde entre núcleos; vaciar el TLB en `pmap_switch` arregla la migración
+
+- **tlbtest (102.3.A), 50 000 rondas por caso:**
+
+| Escritor | Lector | Viejas | 1ª lectura mal |
+|---|---|---|---|
+| núcleo 0 | normal | 40 280 | 9 719 |
+| núcleo 1 | normal | 30 429 | 19 565 |
+| núcleo 0 | con `tlbie` local | 0 | 49 994 |
+| núcleo 1 | con `tlbie` local | 0 | 49 986 |
+
+  - "Otros" = 0, timeouts = 0.
+  - La "1ª lectura mal" es la página de la ronda anterior (P2): también es TLB viejo. Con B′ no hay `tlbie` antes de esa lectura.
+- **HID (los dos núcleos iguales):** HID0 0x0011C06C, HID2 0, HID4 0x80000000, HID5 0xC0000000, L2CR 0x80000000.
+- **`HID5 |= 0x67FDC000`** (clave `WiiHID5Or` en `setupSMP`; núcleo 0 en caliente, el núcleo 1 lo copia en `startCPU`): **panic en el arranque**, 0x300 (acceso a datos) en `WiiCPU::diagnoseInterrupts`, DAR 0x3CC03A8C, DSISR 0x40000000. En caliente queda descartado.
+- **smp65:** gancho de 102.3.C en `_pmap_switch` (0x99574) + migración libre (`WiiSMPWhitelistCore=0`), con afinidad por tarea en el modo 2:
+  - estrés Cocoa **24/24 limpio** (0 volcados, 0 `$(date)` vacíos, 0 "not malloced");
+  - gprtest 18/18 bien (6 a la vez + `alias`, 3 tandas);
+  - bucle `sh`: 1 solo **8 s** / 2 a la vez **8 s** (antes 4 s: el vaciado cuesta).
+- **Preguntas:** (1) ¿IPI para que el otro núcleo vacíe su TLB (o haga `tlbie` de esa VA) en `hw_rem_map`/`mapInvPte32`/`hw_protect`/`handlePF`…? ¿Mínimo de sitios y cómo sin interbloqueos (`tlbieLock`, interrupciones apagadas)? (2) ¿Hay algún bit de HID (o un orden correcto de HID5 antes de la L2, desde el trampolín) que haga difundir el `tlbie`, o Espresso no lo hace? (3) ¿Relación con el panic de la Parte 97?
+
+---
+
+# PARTE 104 — Respuesta: derribo de TLB por software (IPI solo cuando el otro núcleo usa ese pmap; si no, vaciado perezoso por generación)
+
+## 104.1 Qué deja claro el tlbtest
+- **HID0[ABE] ya está puesto** (0x0011C06C incluye 0x8) y aun así el `tlbie` de un núcleo **no toca el TLB del otro**: 60–80 % de lecturas viejas; con un `tlbie` local, 0.
+- ABE en la familia 750 difunde las operaciones de caché, `sync` y `eieio`; **la invalidación del TLB no es algo que el 750 escuche del bus** [NO VERIFICADO en manual, pero es lo que mides]. El `tlbsync` de XNU no ayuda porque no hay nada que esperar.
+- **Consecuencia:** todo lo que XNU confía al `tlbie` "difundido" está roto con 2 núcleos, tanto en mapeos de usuario como del kernel. El apaño de smp65 cubre la migración, pero no:
+  - dos hilos del **mismo** proceso en núcleos distintos (entre ellos no se llama a `pmap_switch`);
+  - los cambios en mapeos del **kernel**;
+  - los cambios de una página física en **todos** sus mapeos (`pmap_page_protect`, `pmap_disconnect`, `pmap_clear_modify`: pageout, E/S con UPL).
+  - Este último incluye un riesgo de **perder datos**: si el otro núcleo guarda en su TLB una entrada con C (modificado) = 1, sigue escribiendo la página sin volver a marcar C en la PTE. La VM la cree limpia y no la escribe a disco.
+
+## 104.2 Pregunta 2: bits de HID
+- **Ningún bit documentado** de HID0/HID2/HID4/HID5 del 750CL/Espresso trata de la invalidación del TLB:
+  - HID4 (NetBSD `oea/hid.h:193-202`): H4A, L2FM, BPD, SBE, ST0, LPE, DBP, L2MUM, L2_CCFI;
+  - HID5 (`hid.h:222-232`): H5A, PIRE, UDMA, L2CR_L2SIZ, L2CR, más bits sin nombre.
+- **NetBSD y Linux confían en el `tlbie` difundido** (NetBSD `oea/pmap.c:745-812`; Linux `mm/book3s32/nohash_low.S:16-40`) **y no mandan ningún IPI de TLB** (NetBSD solo los tiene en booke/e500). Lo más probable es que tengan el mismo fallo latente y se note poco. Tu medida manda sobre su código.
+- **El panic en caliente** (DSI "sin traducción" en `diagnoseInterrupts`) casa con haber cambiado bits de L2 con la L2 encendida (`L2CR`/`L2CR_L2SIZ` = 0x01800000) o alguno sin documentar. **No sigas por ahí en caliente.**
+- **Experimento opcional y de baja expectativa**, solo si quieres cerrar la duda: en el trampolín del **núcleo 1** (antes de su L2), probar de uno en uno los bits sin nombre de `0x67FDC000` **sin** 0x03800000 (UDMA y L2), es decir, de `0x247DC000`: 0x20000000, 0x04000000, 0x00400000, 0x00200000, 0x00100000, 0x00080000, 0x00040000, 0x00010000, 0x00008000, 0x00004000. Cada vez, tlbtest con escritor = núcleo 0 y lector = núcleo 1. Si alguno baja las "viejas" a 0, habrá bit. Si no, **Espresso no escucha `tlbie`** y el derribo por software (104.3) es el arreglo.
+
+## 104.3 Pregunta 1: derribo de TLB por software, mínimo y sin interbloqueos
+
+### Principios
+1. **No dentro de `hw_vm.s`.** Allí se tienen el candado del PTEG, el `sxlk` del pmap o `tlbieLock` con las interrupciones apagadas: esperar al otro núcleo ahí es un interbloqueo seguro.
+2. **Envolver las funciones C de `pmap.c`** y actuar **después** de que devuelvan: ya no se tiene ningún candado del pmap, y la página liberada no vuelve a la VM hasta que se devuelve al llamador.
+3. **El otro núcleo solo puede usar entradas viejas de un pmap P si está corriendo P** (entradas con VSID). Por tanto:
+   - si el otro núcleo **corre P ahora** (su `ppUserPmapVirt` == P), si P es el **kernel** o si no se sabe qué pmaps hay (operaciones **por página física**) → **IPI síncrona**: el otro núcleo vacía su TLB y confirma antes de seguir;
+   - si no → **perezoso**: se sube una generación de P y el otro núcleo vaciará su TLB cuando entre en P (`pmap_switch`). Así el vaciado de smp65 deja de ser en cada cambio de contexto.
+
+### Datos (sin tocar XNU)
+- En `struct pmap` hay campos **sin uso** (`pmap.h:151-203`; grep: nadie los usa):
+  - `pmapRsv3[0]` @ **+0x1B4** = `gen` (generación de invalidaciones);
+  - `pmapRsv3[1]` @ **+0x1B8** = `visto[0]`; `pmapRsv3[2]` @ **+0x1BC** = `visto[1]` (generación ya vaciada por cada núcleo);
+  - `pmapRsv2[0]` @ **+0x141** (byte) = bandera "pmap de tarea" (ha pasado por `pmap_switch`).
+- `per_proc.ppUserPmapVirt` @ **+0x198** (`exception.h:364`, línea de caché 0x180; compruébalo en `_hw_set_user_space`: `lwz r2,0x198(r6)`).
+
+### Buzón por núcleo + IPI (en el kext; el IPI por tu camino de SCR con candado)
+```c
+static volatile UInt32 tlbReq[2] __attribute__((aligned(32)));   /* líneas separadas */
+static volatile UInt32 tlbAck[2] __attribute__((aligned(32)));
+static volatile SInt32 tlbSeq;
+static UInt32 nSync, nLazy, nFlushSw, nTimeout;
+
+static inline void tlb_flush_local(void) {         /* local: en Espresso el tlbie no sale del núcleo */
+    UInt32 ea = 0; int i;                            /* sin tlbieLock ni tlbsync (nada que esperar)    */
+    for (i = 0; i < 128; i++, ea += 0x1000) __asm__ volatile("tlbie %0" :: "r"(ea) : "memory");
+    __asm__ volatile("sync; isync" ::: "memory");
+}
+void tlb_ipi_service(int me) {                        /* en el manejador de IPI, ANTES del filtro de SIGP */
+    UInt32 r = tlbReq[me];
+    if (r != tlbAck[me]) { tlb_flush_local(); tlbAck[me] = r; __asm__ volatile("sync"); }
+}
+void tlb_shoot_sync(void) {
+    int me, other; UInt32 r; uint64_t limite;
+    disable_preemption();
+    me = cpu_number(); other = me ^ 1;
+    if (!nucleoVivo(other)) { enable_preemption(); return; }
+    r = (UInt32)OSIncrementAtomic(&tlbSeq) + 1;
+    tlbReq[other] = r; __asm__ volatile("sync");
+    enviarIPI(other);                                  /* mismo camino que tus SIGP */
+    limite = ahora() + 10 ms;
+    while ((SInt32)(tlbAck[other] - r) < 0) {
+        tlb_ipi_service(me);                            /* si el otro nos está derribando a la vez */
+        if (ahora() > limite) { nTimeout++; break; }
+    }
+    enable_preemption(); nSync++;
+}
+```
+
+### Regla tras cada operación (P = pmap, o NULL si es por página física)
+```c
+#define GEN(p)     (*(volatile UInt32 *)((char *)(p) + 0x1B4))
+#define VISTO(p,c) (*(volatile UInt32 *)((char *)(p) + 0x1B8 + 4 * (c)))
+#define TAREA(p)   (*(volatile UInt8  *)((char *)(p) + 0x141))
+
+void post_pmap_op(pmap_t p) {
+    if (p == NULL || p == kernel_pmap || !TAREA(p)) {   /* físico, kernel o pmap anidado (región compartida) */
+        if (p) GEN(p)++;
+        tlb_shoot_sync(); return;
+    }
+    GEN(p)++; __asm__ volatile("sync");                 /* 1) subir generación   2) mirar al otro */
+    if (ppUserPmapVirt(otro núcleo) == (UInt32)p) tlb_shoot_sync(); else nLazy++;
+}
+```
+
+### Envolturas (gancho a la entrada: guardar LR, llamar al original, llamar a `post_*`, devolver r3/r4 intactos)
+| Función (`osfmk/ppc/pmap.c`) | Cuándo llamar a `post_pmap_op` |
+|---|---|
+| `pmap_remove(pmap, sva, eva)` (l.891) | siempre, con `pmap` |
+| `pmap_protect(pmap, sva, eva, prot)` (l.1044) | siempre, con `pmap` |
+| `pmap_enter(pmap, va, pa, …)` (l.1086) | solo si **reemplaza**: antes `viejo = pmap_find_phys(pmap, va)`; después, si `viejo && viejo != pa` |
+| `pmap_remove_some_phys(pmap, pa)` (l.823) | siempre, con `pmap` |
+| `pmap_page_protect(pa, prot)` (l.929) | si `prot != VM_PROT_ALL`, con NULL |
+| `pmap_disconnect(pa)` (l.999) | siempre, con NULL (**conserva r3**, devuelve refmod) |
+| `pmap_clear_modify(pa)` (l.1480) | siempre, con NULL (bit C: si no, se pierden datos) |
+| `pmap_clear_refmod(pa, mask)` (l.1539) | si `mask & VM_MEM_MODIFIED` (0x01), con NULL |
+
+- **`pmap_switch` (sustituye el vaciado incondicional de smp65; ejecuta el original PRIMERO):**
+  ```c
+  void post_pmap_switch(pmap_t p) {             /* ya se ha escrito ppUserPmapVirt = p */
+      int me = cpu_number(); UInt32 g;
+      if (p == kernel_pmap) return;             /* los hilos del kernel no usan entradas de usuario */
+      TAREA(p) = 1;
+      __asm__ volatile("sync");                 /* pareja del 'sync' de post_pmap_op (Dekker) */
+      g = GEN(p);
+      if (VISTO(p, me) != g) { tlb_flush_local(); VISTO(p, me) = g; nFlushSw++; }
+  }
+  ```
+- **`pmap_destroy` (a la entrada, si r3 ≠ 0):** `GEN(p)++`. Un pmap reciclado de la lista libre conserva su VSID; así cada núcleo vaciará su TLB la primera vez que entre en él con su nuevo dueño. Los pmaps nuevos de `zalloc` vienen a cero (`pmap.c:684`) y no vacían nada.
+- **Sin envoltura:**
+  - el robo de PTE en `handlePF` y el `hrmBlock32`: el mapeo sigue siendo válido o se quita luego por `pmap_remove`;
+  - `pmap_clear_reference`: solo afecta a la LRU;
+  - `pmap_unnest`: ya obliga a recargar los SR en todos (`pmap.c:1755-1778`) y cambia el VSID efectivo.
+
+### Por qué no hay interbloqueo
+- Las envolturas corren **sin** candados de pmap ni `tlbieLock`. El manejador de IPI **no** toma `tlbieLock`.
+- Si los dos núcleos se derriban a la vez (incluso con las interrupciones apagadas), cada uno **atiende la petición del otro en su bucle de espera**.
+- Caso residual: el otro núcleo espera con las interrupciones apagadas un candado que tiene el llamador (p. ej. un `IOSimpleLock` alrededor de un `IOFree` grande). Lo cubre el **timeout** (10 ms, contador `nTimeout`). Si `nTimeout` sube, se estudia ese caso.
+- **Orden:** `GEN++ ; sync ; leer ppUserPmapVirt(otro)` en un lado, y `escribir ppUserPmapVirt ; sync ; leer GEN` en el otro. Al menos uno de los dos ve el cambio del otro: o se manda IPI, o se vacía al entrar.
+
+### Residuos conocidos [aceptables por ahora]
+- `copyinmap`/`MapUserMemoryWindow` con un mapa que no es el de la tarea actual sin pasar por `pmap_switch` (depuración, `vm_read`): raro.
+- VSID liberados con `zfree` y reutilizados tras dar la vuelta a los 16 384 espacios: para entonces el TLB (128 entradas) ya no los tiene.
+
+## 104.4 Pregunta 3: sí, el panic de la Parte 97 encaja
+- Las pilas del kernel se piden con `kernel_memory_allocate(stack_map, …)` (`kern/stack.c:133`) y `stack_collect` las devuelve con `vm_map_remove(stack_map, …)` (`stack.c:275`) → `pmap_remove(kernel_pmap)` → `tlbie` **solo local**.
+- El otro núcleo sigue traduciendo esa dirección a las páginas físicas **viejas**. Cuando la VM las reparte y la dirección vuelve a usarse para otra pila:
+  - ese núcleo lee el enlace de lista libre (`stack+0x3FFC`) de la página vieja → **"enlace resucitado"**;
+  - al seguirlo cae en direcciones del kernel sin mapear (DSISR 0x40000000), **en los dos núcleos a la vez**.
+- Es raro porque el kernel reutiliza direcciones virtuales mucho menos que el userland. Con 104.3 queda cubierto: `kernel_pmap` → IPI síncrona. El `dcbz` de la Parte 98 probablemente no era la causa (la prueba 98.4.A dio 0 fallos), aunque quitarlo no hace daño.
+
+## 104.5 Cómo verificarlo
+1. **tlbtest sin B′**, con las envolturas: el `pmap_remove(kernel_pmap)` del escritor dispara la IPI y el lector debe dar **0 viejas** en los dos sentidos. Es la autoprueba del mecanismo.
+2. **mttest** (dos hilos del mismo proceso en núcleos distintos; en modo libre y en la lista blanca):
+   ```c
+   /* mttest.c — cc -O -o mttest mttest.c ; espera 0 malas con 104.3 (con smp65 dará > 0) */
+   #include <stdio.h>
+   #include <pthread.h>
+   #include <sys/mman.h>
+   #define DIR ((void *)0x20000000)
+   #define N 100000
+   static volatile unsigned turno = 0, malas = 0;
+   static void *lector(void *x) {
+       unsigned i;
+       for (i = 1; i <= N; i++) {
+           while (turno != 2 * i - 1) ;
+           if (*(volatile unsigned *)DIR != i) malas++;
+           turno = 2 * i;
+       }
+       return 0;
+   }
+   int main(void) {
+       pthread_t t; unsigned i;
+       pthread_create(&t, 0, lector, 0);
+       for (i = 1; i <= N; i++) {
+           void *p = mmap(DIR, 4096, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE | MAP_FIXED, -1, 0);
+           *(volatile unsigned *)p = i;
+           turno = 2 * i - 1;
+           while (turno != 2 * i) ;
+           munmap(DIR, 4096);
+       }
+       pthread_join(t, 0);
+       printf("malas=%u de %u\n", malas, N);
+       return malas != 0;
+   }
+   ```
+3. **Contadores por segundo:** `nSync`, `nLazy`, `nFlushSw`, `nTimeout`. `nTimeout` debe ser 0.
+4. **Estrés Cocoa 24 rondas** en modo libre, gprtest, `alias`, `cp`+`cmp`, y **1 h de carga**.
+5. **Rendimiento:** bucle `sh` 1 solo / 2 a la vez. Objetivo: volver a ~4 s. Si no, mide cuánto cuesta un `tlb_flush_local` (`mftb` antes y después) y cuántos `nFlushSw`/`nSync` hay.
+
+## 104.6 Orden
+1. Implementar 104.3: buzón + IPI, `post_pmap_op`, las 8 envolturas, `post_pmap_switch` (en lugar del vaciado incondicional) y `GEN++` en `pmap_destroy`.
+2. tlbtest sin B′ → 0 en los dos sentidos.
+3. mttest en modo libre → 0 malas (compáralo con smp65, que debería fallar).
+4. Estrés, 1 h de carga y medidas de 104.5.
+5. Afinidad: con 104.3 ya no hace falta por el TLB. La lista blanca sigue siendo necesaria por el erratum de `stwcx.` hasta las islas (96.1).
+6. Opcional: bisección de bits de HID5 en el trampolín del núcleo 1 (104.2).
