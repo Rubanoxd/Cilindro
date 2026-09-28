@@ -43,7 +43,7 @@ En el código actual (master 105c498) Apple por MoltenVK se clasifica como `chip
 ## 3. Plan por fases
 
 ### Fase 0 — Preparación (una vez)
-1. Enchufado, **Modo bajo consumo OFF**, pantalla completa (activa Game Mode de macOS), cerrar navegador.
+1. Enchufado, **Modo bajo consumo OFF**, pantalla completa, cerrar navegador. **No forzar el Game Mode de macOS**: RPCS3 lo desactivó a propósito porque empeora la emulación.
 2. Mac en superficie dura; para sesiones largas, base con ventilador (el Air sin ventilador baja relojes P tras ~10 min).
 3. Firmware 4.92, juego actualizado a la última versión del parche (los parches de la comunidad dependen de la versión).
 4. Precompilar: clic derecho en el juego → *Build PPU cache*. Primera partida: dejar que termine la compilación de SPU/shaders antes de medir.
@@ -53,7 +53,7 @@ En el código actual (master 105c498) Apple por MoltenVK se clasifica como `chip
 2. Si se cuelga, probar en orden (uno a uno, anotando resultado):
    - `SPU loop detection: true` / `false`
    - `Max SPURS Threads: 4`
-   - `Thread Scheduler Mode: RPCS3 Scheduler` (alt)
+   - ~~`Thread Scheduler Mode`~~ descartado: en Apple Silicon la afinidad es genérica, no hace nada (ver OPTIMIZACION.md)
    - `SPU Block Size: Safe`
    - `Sleep Timers Accuracy` en el valor más preciso
    - Driver Vulkan: KosmicKrisp en lugar de MoltenVK
@@ -65,7 +65,7 @@ En el código actual (master 105c498) Apple por MoltenVK se clasifica como `chip
 Medir **cada cambio por separado** en las escenas de referencia (sección 4). Orden sugerido:
 1. Base: Approximate XFloat, Relaxed ZCULL, sin MSAA, 720p (100%), Async shaders, async textures OFF.
 2. `SPU Block Size: Mega` → `Giga`.
-3. `Preferred SPU Threads`: 0 → 2 → 3 → 4. Idea: agrupar la carga SPU pesada en los 4 núcleos P.
+3. `Preferred SPU Threads`: 0 → 2 → 3 → 4. Nota: no fija núcleos; limita cuántos SPU ejecutan a la vez el mismo código caliente (SPUThread.cpp:612). Sigue valiendo probarlo.
 4. `Max SPURS Threads`: 6 → 5 → 4. En 4P+6E puede **ganar** FPS (menos migraciones a núcleos E); si hay cuelgues o lógica rota, volver a 6.
 5. `SPU XFloat Accuracy: Relaxed` — ~+20 % reportado en este juego, pero **algunos capítulos no cargan**. Usar solo por tramos y volver a Approximate si un nivel no carga.
 6. `Multithreaded RSX` ON solo como último experimento.

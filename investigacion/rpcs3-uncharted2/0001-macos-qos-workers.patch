@@ -1,0 +1,27 @@
+diff --git a/Utilities/Thread.cpp b/Utilities/Thread.cpp
+index 747a218..c309adb 100644
+--- a/Utilities/Thread.cpp
++++ b/Utilities/Thread.cpp
+@@ -2769,7 +2769,21 @@ void thread_base::start()
+ 	pthread_attr_init(&attrs);
+ 	pthread_attr_setstacksize(&attrs, 0x800000);
+ 	
+-	pthread_attr_set_qos_class_np(&attrs, QOS_CLASS_USER_INTERACTIVE, 0);
++	// Background compile workers (shaders, PPU/SPU LLVM) get a lower QoS so that on chips with few
++	// P-cores (base M-series: 4) the scheduler keeps those cores for PPU/SPU/RSX threads.
++	// Set RPCS3_MAC_BG_QOS=0 to restore the old behaviour for A/B testing.
++	static const bool s_bg_qos = []
++	{
++		const char* env = ::getenv("RPCS3_MAC_BG_QOS");
++		return !env || env[0] != '0';
++	}();
++
++	const auto tname = m_tname.load();
++	const std::string_view name = tname ? std::string_view(*tname) : std::string_view();
++	const bool is_bg_worker = s_bg_qos && (name.starts_with("RSX.W") || name.starts_with("SPUW.") || name.starts_with("PPUW.") ||
++		name.starts_with("SPU Worker ") || name.starts_with("SPRX Worker "));
++
++	pthread_attr_set_qos_class_np(&attrs, is_bg_worker ? QOS_CLASS_UTILITY : QOS_CLASS_USER_INTERACTIVE, 0);
+ 	pthread_attr_setschedpolicy(&attrs, SCHED_RR);
+ 	pthread_attr_setschedparam(&attrs, &sp);
+ 	ensure(pthread_create(&thread_id, &attrs, entry_point, this) == 0);
