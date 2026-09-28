@@ -70,7 +70,8 @@
 > - **Partes 93–94** — los procesos que mueren acaban todos en el `trap` de `__NSRaiseError` (Foundation), incluso `bash`. Encaja con una **página con identidad equivocada** (datos o punteros de otra biblioteca). Faltan por tapar las **revalidaciones de PTE** de `hw_walk_phys`, `hw_protect`, `hw_test_rc` y `hw_test_rc_gv` (94.1). Confirmar con la cadena de llamadas del core y el puntero usado (94.2), y comparar en UP (94.3).
 > - **Partes 95–96** — **SMP estable con userland sano** (cowtest, gcc, cp/cmp, 0 errores de SD). Disco dañado por pruebas antiguas: reparado y con copia. Siguiente: (1) **lista blanca** de procesos desatados para medir ya (96.2); (2) **islas de stubs** en la región compartida, cargadas como dependencia de libSystem (96.1); (3) arranque SMP temprano con vigilancia del disco (96.3).
 > - **Partes 97–98** — panic tras ~40 min: un enlace de lista libre (caché de pilas) resucitado con basura, y los dos núcleos fallando a la vez en direcciones del kernel sin mapear. Más probable: **`dcbz` que no anula la copia del otro núcleo** (a). (b) y (c) descartadas por el código. Prueba de `dcbz` con turnos por atómicos y plan para quitar `dcbz` con 2-3 parches de una instrucción (98.3).
-> - Si algo se contradice, vale la parte **más reciente** (98 > 97 > 96 > 95 > 94 > 93 > 92 > 91 > 90 > 89 > 88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
+> - **Partes 99–100** — smp60: con la **L2 del núcleo 1 encendida**, **2× real** (lista blanca). El fallo de "primera ejecución"/`$(date)` vacío es un **alias de página entre procesos que también pasa en UP**: `free()` recorre la lista de zonas de malloc de **otro** proceso (con Foundation). La COW del `__DATA` compartido de XNU es correcta en el código (100.2); el alias está por debajo de la VM: traducción vieja de un **pmap reciclado con el mismo VSID** (A) o página física repartida dos veces (B). Pruebas: Wiintosh limpio, `alias.c`, A/B `free_pmap_max=-1`, escaneo de la tabla hash (100.4). Stubs aplazados.
+> - Si algo se contradice, vale la parte **más reciente** (100 > 99 > 98 > 97 > 96 > 95 > 94 > 93 > 92 > 91 > 90 > 89 > 88 > 87 > 86 > 85 > 84 > 83 > 82 > 81 > 80 > 79 > 78 > 77 > 76 > 75 > 74 > 73 > 72 > 71 > 70 > 69 > 68 > 67 > 66 > 65 > 64 > 63 > 62 > 61 > 60 > 59 > 58 > 57 > 56 > 55 > 54 > 53 > 52 > 51 > 50 > 49 > 48 > 47 > 46 > 45 > 44 > 43b > 43 > 42 > 41 > 40 > 39 > 38 > …).
 >
 > Todo lo marcado **[NO VERIFICADO]** debe comprobarse en la consola antes de usarlo.
 
@@ -87,14 +88,14 @@
 - En la Wii U: gcc 4.0.1 (Xcode 2.4.x), cabeceras en `Kernel.framework`, 17 GB libres, partición BOOT = `disk0s2` (no montada), kexts Wiintosh 0.5.2 cargados.
 
 **Reglas:**
-1. Lee primero las **Partes 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
+1. Lee primero las **Partes 100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43b, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25b, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14 y 13** (lo más reciente), luego las Partes 1–12. Las Partes 6–13 son datos reales/correcciones y prevalecen sobre las 1–5.
 2. Solo lecturas hasta que el humano diga "adelante". Toda escritura de registros, `kextload`, instalación de mkext o reinicio → pedir confirmación.
 3. `sudo` en Tiger es NOPASSWD ALL (Parte 9.3): **no** ejecutar `sudo` sin confirmación.
 4. Cuando haga falta acción física, avisar (Parte 3/5.5) y decir exactamente qué hacer.
 5. Lo marcado **[NO VERIFICADO]** se comprueba antes de construir encima.
 6. Anotar cada prueba en `docs/BITACORA.md` del fork.
 
-**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 98.4** (prueba de dcbz bien sincronizada; quitar dcbz de bzero/pmap_zero_page/copias).
+**Estado actual (Parte 14):** fases 0, 2 y 3 hechas; el plugin GA carga pero el WindowServer no lo usa. **Siguiente trabajo: 100.6** (congelar smp60; revalidar con la L2 del núcleo 1; cazar el alias de páginas entre procesos: Wiintosh limpio, `alias.c`, `free_pmap_max=-1`, escaneo de la tabla hash).
 
 **Primeras tareas originales (ya hechas, se dejan como referencia):**
 1. Clonar `Wiintosh/osx-drivers` (o el fork del humano) y `Goldfish64/MacPPCKernelSDK` en el Mac.
@@ -4937,3 +4938,205 @@ No hace falta un stub por sitio:
 2. Parches 98.3 (bzero → bzero_nc, pmap_zero_page → bzero_phys, `dcbz` de copias → `nop`), lo pruebe o no la 98.4.A. Son baratos y seguros.
 3. Una hora de carga con 2 núcleos. Revisa los `dcbz` de saveareas y `mapping` solo si vuelve un panic parecido.
 4. Luego, lista blanca y medidas (96.2).
+
+---
+
+# PARTE 99 — (informe del Mac) smp60: 2× real con 2 núcleos; el fallo de "primera ejecución" es una fuga entre procesos que también pasa en UP
+
+- **smp59 (98.3):** `_bzero` → `b _bzero_nc` (`memset(…,0)` también cae en `_bzero`); `_pmap_zero_page` → stub a `_bzero_phys(pn<<12, 4096)`; `dcbz` de copias (0xAB134 `pmap_copy_page`, 0xACD04 `memcpy`) → `nop`.
+- **Prueba de `dcbz` 98.4.A** (turnos con `OSIncrementAtomic`/`OSAddAtomic(0)`): completa, **0 fallos, 0 esperas agotadas**. En esa forma, `dcbz` sí anula la copia del otro núcleo.
+- **1 hora de carga con 2 núcleos:** 59 de 60 vueltas perfectas (cowtest 100, gcc ×3, cp+cmp de 5 MB, 0 errores de SDHC). **Un solo `cp=MAL`**; después, 90 copias más (40 seguidas y 50 en paralelo) todas bien. Sin panic.
+- **smp60: la L2 del núcleo 1 estaba apagada.** El trampolín ponía L2CR = 0 y `pfl2cr` = 0, así que XNU no la encendía. Ahora `initCPU` del núcleo 1 escribe L2CR = setup, luego `|L2I`, espera a que baje `L2IP` y después `|L2E` con el L2CR del núcleo 0 (**0x80000000**).
+- **Medidas smp60** (lista blanca 96.2 activa: sh, bash, make, gcc, cc1, as, ld, cp, dd, gzip, md5, cmp, cowtest; sus binarios y bibliotecas —libSystem, libncurses, libgcc_s, libiconv, libcrypto— no tienen ningún `stwcx.` atómico sin parchear):
+  - bucle `sh` de 50 000 vueltas: 1 solo **3–4 s**, 2 a la vez **4 s** (con la L2 del núcleo 1 apagada: 13–14 s y 7–23 s);
+  - gzip de 18 MB: **5 s** y **5 s** → **2× de rendimiento** con 2 procesos.
+- **El fallo de "primera ejecución" y los `$(date)` vacíos:**
+  - `bash` muere (volcado) en **0x92BFF07C = trap de `__NSRaiseError`** (Foundation).
+  - Pila: `bash` (0x74FBC…) → **`free`+16 / `free`+92** (libSystem 0x900062F0 / 0x9000633C) → llamada por puntero con **r12 = 0x92BC1124** (≈ `-[NSObject class]`, Foundation) → trap. **r3 = 0xA2BE2B88**, r2 = 0xA2BBE508 (datos de Foundation en 0xA2B…).
+  - `bash` solo carga libSystem y libncurses. Así que **`free()` ha encontrado una zona de malloc de Foundation** en la lista de zonas de libSystem (`__DATA` de la región compartida, 0xA…), creada en **otro proceso**.
+  - **Pasa también en UP:** `grolbp` y `hdxml2manxml` (solo libSystem) mueren en el mismo trap con 1 núcleo. No es del SMP.
+  - Explica los `$(date)` vacíos (el subshell muere en `free`), `cat`/`cal` que fallan la primera vez y probablemente el `cp=MAL`.
+- **Preguntas:** (1) ¿dónde se rompe la COW del `__DATA` compartido (submapa de datos, `copy`/`needs_copy`, `pmap_nest`/`hw_add_map`, R/C y protección en `hw_vm.s`) y qué parte de WiiPlatform podría intervenir?; (2) ¿cómo se confirma?; (3) ¿damos el SMP por bueno con la lista blanca y abrimos lo de la región compartida aparte, o antes los stubs de userland?
+
+---
+
+# PARTE 100 — Respuesta: la COW de XNU es correcta; lo que hay es un "alias" de páginas por debajo de la VM, y así se caza
+
+## 100.1 Qué dice exactamente el volcado
+- En la Libc de 10.4.11 (**Libc-391.2.10**), `free()` (`gen/malloc.c:464-478`) llama a `find_registered_zone()` (en línea, `malloc.c:79-95`), que recorre `malloc_zones[0 … malloc_num_zones-1]` y llama a `zone->size(zone, ptr)`. Por tanto **r3 = 0xA2BE2B88 es el puntero de zona** y **r12 es `zone->size`**.
+- Esa lista vive en el `__DATA` de libSystem: `initial_malloc_zones[8]`, `malloc_num_zones` y `malloc_zones` (`malloc.c:42-51`). Solo se escribe al registrar zonas (`malloc_zone_register`, `malloc.c:364-379`).
+- Conclusión: en la página de datos de libSystem que ve ese `bash` hay una zona que **registró un proceso que usa Foundation**. No es un puntero suelto ni basura: es contenido correcto **de otro proceso**. Encaja con la "página con identidad equivocada" de la Parte 93.
+- 0x92BC1124 seguramente es una función estática de Foundation pegada a `-[NSObject class]` (el símbolo exportado más cercano). Si quieres saber qué estructura hay en 0xA2BE2B88 (dato de apoyo, no hace falta para el arreglo):
+  `nm -nm /System/Library/Frameworks/Foundation.framework/Foundation | awk '$1<="a2be2b88"' | tail -3` (y lo mismo con `92bc1124`).
+
+## 100.2 Pregunta 1: la COW del `__DATA` compartido es correcta en el código de xnu-792
+Recorrido completo (todo es código de Apple que no hemos tocado):
+1. **Cómo entra la región de datos en cada proceso.** `bsd/kern/mach_loader.c:590-593`: `vm_map(map, …, map_info.data_region, 0, TRUE /*copy*/, VM_PROT_READ, VM_PROT_READ, VM_INHERIT_SHARE)`, **sin** el alias `VM_MEMORY_SHARED_PMAP` (ese solo lo lleva el **texto**, l.584-588). En `osfmk/vm/vm_user.c:899-916` eso da `vm_map_submap(…, use_pmap = FALSE)` y `needs_copy = TRUE` en la entrada del proceso. → **Los datos no se anidan con `pmap_nest`**: cada proceso tiene sus propias PTE en 0xA…
+2. **Cómo se cargan los `__DATA` de las bibliotecas en la submapa global.** `lsf_map` (`osfmk/vm/vm_shared_memory_server.c:2055-2067`): `mach_vm_map(…, copy = TRUE, init_prot & (READ|EXECUTE), max_prot & (READ|EXECUTE))`. **Se quita el permiso de escritura**: las páginas de la submapa global son de solo lectura para todos.
+3. **Primera escritura de un proceso.** `vm_map_lookup_locked` (`osfmk/vm/vm_map.c:7088-7200`, `cow_sub_map_parent`): recorta el trozo y pone en el **mapa del proceso** una entrada privada que hace sombra del objeto de la submapa (`needs_copy`, herencia COPY, con escritura). La página privada sale de ahí.
+4. **Lecturas.** Bajan a la entrada de la submapa, que no tiene escritura (`vm_map.c:7227`), y la PTE queda de solo lectura.
+5. **fork.** `vm_map_fork` (`vm_map.c:6809-6870`): las entradas privadas se copian COW; la submapa se comparte sin anidar (`vm_map_fork_share`, l.6503-6516: solo hace `pmap_nest` si `use_pmap`).
+6. **Regiones privadas** (`clone_system_shared_regions`, `bsd/vm/vm_unix.c:971-1060`, con `vm_region_clone`, `vm_map.c:10136-10192`): `vm_map_region_replace` (l.9749-9840) conserva `needs_copy`.
+
+**Conclusión:** en la VM no hay ningún camino por el que una escritura llegue a la página global. Además, si la página global estuviera contaminada, **todos** los procesos nuevos fallarían siempre, no "a veces" ni "la primera vez". El patrón encaja con un **alias**: dos procesos usan **la misma página física** en **la misma dirección** (los datos de libSystem en 0xA…), y eso pasa **por debajo** de la VM: en el pmap, la tabla hash, el TLB o el reparto de memoria física.
+
+**Qué de Wiintosh podría intervenir (revisado en las fuentes):**
+- **WiiPlatform y los demás kexts de osx-drivers no tocan pmap ni BAT.** Solo hay `ml_io_map` en WiiAudio (un búfer de audio suyo) e `_invalidate_dcache` en WiiSDHC/WiiOHCI.
+- **Parches de OpenBIOS para Tiger:** solo `_PE_find_scc` → 0 y la comprobación de CPU (rama 750CX) (`openbios arch/ppc/wii/macosx/xnu.c:358-412`). Los de BAT son solo para ≤ Jaguar, y Tiger deja los BAT invalidados (`osfmk/ppc/ppc_vm_init.c:119-140`).
+- **WiiSDHC** hace el DMA a un **búfer intermedio fijo**, hace `dcbi` y copia con la CPU (`WiiSDHC_Commands.cpp:370-381` y `486-499`). El DMA no puede escribir en páginas de procesos.
+- **El ARM (wiiu-loader)** se pasa a SRAM y solo atiende IPC (`arm/application.c:87-151`). No toca MEM2.
+- **Mapa de memoria:** MEM1 0–32 MB + MEM2 0x10000000–0x8DFFFFFF (`macosx.c:254-257`). XNU pone la tabla hash (8 MB con 2 GB de RAM) en 0x8D800000–0x8DFFFFFF y el PCA justo debajo, fuera de lo asignable (`osfmk/ppc/pmap.c:383-446`). Nada raro.
+- Lo **no estándar** que queda: **nuestros parches en memoria** (stubs de `stwcx.`, las 15 PTE con `dcbf`, `dcbz`, L2) y **WiiGX2Accel** (el CP_DMA escribe en RAM). Si "UP" significa el mismo mkext con `cpus=1`, esos parches también estaban activos. Por eso la primera prueba es con Wiintosh limpio (100.4.A).
+
+## 100.3 Qué mecanismo puede dar el alias [NO VERIFICADO]
+- **(A) Una traducción vieja que sobrevive a su dueño.** En PPC los pmap se **reciclan con el mismo VSID**: `pmap_destroy` guarda hasta 32 en una lista libre (`pmap.c:168` y `785-790`) y `pmap_create` saca **el último liberado** (`pmap.c:672-675`).
+  - Si al morir un proceso X queda viva una PTE en la tabla hash (o una entrada del TLB) de su página de datos de libSystem (física P), el **siguiente proceso nuevo** hereda ese VSID y **ve P sin pasar por un fallo de página**. Ejemplo: el hijo del fork de `$(date)`.
+  - Mientras tanto, la VM ya dio P a otro proceso Z (la lista de páginas libres también saca primero lo último liberado). El proceso nuevo lee la lista de malloc de Z (Finder…) y muere en `free`.
+  - Encaja con "proceso nuevo", `$(date)`, "la primera vez" y el `cp=MAL` (el búfer de `cp` cae en una página ajena).
+  - Pista: si esa PTE vieja siguiera en la tabla hash y XNU robara su hueco, no encontraría el mapping y se pararía con `Choke` (`hw_vm.s:4390-4394` → `hpfLostPhys`, l.4620). Si el contador de robos (`hwSteals`, per_proc **+0x8FC**) sube mucho y nunca ha salido un Choke, es más probable que lo viejo esté en el **TLB** que en la tabla.
+- **(B) Una página física repartida dos veces** (doble liberación o solapamiento): los dos procesos usan P porque la VM cree que es de cada uno.
+- 100.4.C separa A de B barato; 100.4.D lo demuestra.
+
+## 100.4 Pregunta 2: cómo confirmarlo (de más barato a más caro)
+
+### A. ¿Pasa con Wiintosh limpio?
+- Arranca en UP con el **mkext de la release 0.5.2** y **sin claves `WiiSMP`**: sin parches en memoria, sin WiiGX2Accel y con el WiiSDHC original (en UP no daba errores).
+- Mide la tasa de fallos:
+  ```sh
+  for i in $(jot 50); do echo | grolbp >/dev/null 2>&1; r=$?; [ $r -ge 128 ] && echo "grolbp señal $((r-128))"; done
+  n=0; for i in $(jot 2000); do x=$(date); [ -z "$x" ] && n=$((n+1)); done; echo "date vacios=$n"
+  ```
+  (y lo mismo con `hdxml2manxml`, más la prueba B durante 10 min).
+- **Falla igual** → es de base (XNU sobre Espresso o los drivers originales) → sigue con C y D.
+- **No falla** → el culpable es algo nuestro. Bisección: primero sin WiiGX2Accel; luego sin los parches de PTE; luego sin los stubs de `stwcx.`/`dcbz`.
+
+### B. Prueba de marcas en variables de libSystem (`alias.c`)
+Usa dos variables de libSystem que casi nadie toca: `optreset` (`__DATA,__common`, vale **0** al arrancar) y `opterr` (`__DATA,__data`, vale **1**), declaradas en `stdlib/FreeBSD/getopt.c:51-55`. Estarán en páginas distintas. Cada proceso escribe su marca con su pid y comprueba que nadie más la ve.
+```c
+/* alias.c — ¿ve un proceso la página de datos de libSystem de otro?  cc -O -o alias alias.c */
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <malloc/malloc.h>
+
+extern int optreset;               /* libSystem __common: 0 al arrancar */
+extern int opterr;                 /* libSystem __data:   1 al arrancar */
+extern unsigned malloc_num_zones;  /* exportadas por libSystem (malloc.c:50-51) */
+extern malloc_zone_t **malloc_zones;
+
+static int fallos = 0;
+
+static void mira(const char *donde, unsigned r, unsigned e)
+{
+    if ((unsigned)optreset != r || (unsigned)opterr != e || malloc_num_zones != 1) {
+        fallos++;
+        printf("ALIAS %s pid=%d ppid=%d optreset=%08x (esperado %08x) opterr=%08x (esperado %08x) zonas=%u z0=%p\n",
+               donde, getpid(), getppid(), (unsigned)optreset, r, (unsigned)opterr, e,
+               malloc_num_zones, (void *)malloc_zones[0]);
+        fflush(stdout);
+    }
+}
+
+int main(int argc, char **argv)
+{
+    int vueltas = (argc > 1) ? atoi(argv[1]) : 200;
+    unsigned yo, hijo;
+    int i;
+    void *p;
+
+    p = malloc(16); free(p);                 /* malloc ya inicializado: 1 zona */
+    mira("inicio", 0, 1);
+    yo = 0x7E000000u | (getpid() & 0xFFFF);  /* marca del padre: 0x7E00pppp */
+    optreset = yo; opterr = yo ^ 0x00FF0000u;
+
+    for (i = 0; i < vueltas; i++) {
+        pid_t c = fork();
+        if (c == 0) {
+            mira("hijo-hereda", yo, yo ^ 0x00FF0000u);
+            hijo = 0x6D000000u | (getpid() & 0xFFFF);   /* marca del hijo: 0x6D00pppp */
+            optreset = hijo; opterr = hijo ^ 0x00FF0000u;
+            usleep(2000);
+            mira("hijo-propio", hijo, hijo ^ 0x00FF0000u);
+            p = malloc(64); free(p);                   /* el camino que muere en bash */
+            _exit(fallos ? 1 : 0);
+        }
+        if (c < 0) { perror("fork"); break; }
+        usleep(1000);
+        mira("padre-tras-fork", yo, yo ^ 0x00FF0000u);
+        waitpid(c, NULL, 0);
+        mira("padre-tras-hijo", yo, yo ^ 0x00FF0000u);
+    }
+    if (fallos) printf("pid %d: %d fallos\n", getpid(), fallos);
+    return fallos ? 1 : 0;
+}
+```
+Cómo lanzarla (en UP y en SMP; mientras, abre y cierra apps de Cocoa y lanza los bucles de `grolbp`/`$(date)`):
+```sh
+for n in $(jot 10); do for k in $(jot 20); do ./alias 300 & done; wait; done 2>&1 | tee /tmp/alias.log
+grep ALIAS /tmp/alias.log | head -20      # y con cada pid ajeno: ps -p <pid>  (¿vivo o muerto?)
+```
+| Qué ves | Qué significa |
+|---|---|
+| `inicio` con `optreset` = 0x7E00pppp o 0x6D00pppp de **otro** pid | un proceso nuevo arranca viendo la página de otro (alias) |
+| el **mismo** valor ajeno en varios arranques seguidos | la página global "limpia" está contaminada (improbable según 100.2) |
+| `hijo-hereda` distinto de la marca del padre | el hijo del fork no ve la copia del padre: es el caso de `$(date)` |
+| `padre-tras-fork` = marca 0x6D… del hijo | padre e hijo comparten la página tras el fork: el `pmap_protect` del padre no le quitó la escritura |
+| falla `optreset` pero no `opterr` (o al revés) | el alias es **por página**, no del proceso entero |
+| `zonas` ≠ 1 | la lista de malloc ajena (lo mismo que en bash) |
+| el pid ajeno está **muerto** | apunta a (A); si está **vivo**, pueden ser (A) o (B) |
+
+### C. A/B barato: que los pmap no se reciclen (`free_pmap_max = -1`)
+- `pmap_destroy` solo guarda el pmap en la lista libre si `free_pmap_count <= free_pmap_max` (`pmap.c:786`, los dos son `int`). Con **−1** todos van por el camino normal de liberación (`pmap.c:792-802`: se desenlaza, `pmapTrans[space]` = −1, `zfree`). Los procesos nuevos reciben **VSID nuevos** que no se repiten hasta dar la vuelta a los 16 384 espacios.
+- Receta:
+  1. Mide antes la tasa de fallos con `free_pmap_max = 32` (bucles de A y la prueba B).
+  2. `nm -n /mach_kernel | grep ' _free_pmap_max$'` → escribe **0xFFFFFFFF** en esa palabra con `/dev/kmem`.
+  3. Vacía la lista: `for i in $(jot 40); do /usr/bin/true; done`.
+  4. Repite las mismas medidas.
+  5. Para deshacerlo: escribe **0x00000020**.
+- **Si los fallos desaparecen o caen mucho → (A)**: traducciones viejas de VSID reciclados. **Si no cambian → (B)** o algo que no depende del VSID.
+- Añade `vm_stat` (¿hay pageouts?) y `hwSteals` (per_proc 0 +0x8FC) antes y después de cada tanda.
+
+### D. Prueba definitiva: escanear la tabla hash desde el kext de diagnóstico
+Una función que se lanza a demanda (sysctl) desde tu kext:
+- **Globales de xnu:** `hash_table_base` (addr64_t), `hash_table_size` (unsigned), `pmapTrans` (puntero; cada elemento ocupa **12 bytes**: +0 `pmapPAddr` u64, +8 `pmapVAddr` u32, `osfmk/ppc/pmap.h:205-212`).
+- **Para cada PTE de 8 bytes** en [base, base+size): `w0 = ml_phys_read_64(pa)`, `w1 = ml_phys_read_64(pa+4)` (`machine_routines.h:117-120`). Si `w0 & 0x80000000` (válida):
+  ```
+  space = (w0 >> 7) & 0x3FFF
+  seg   = (((w0 >> 7) ^ (space | (space << 14))) >> 14) & 0xF
+  ea    = (seg << 28) | ((w0 & 0x3F) << 22) | ((((pa >> 6) ^ space) & 0x3FF) << 12)
+  rpn   = w1 >> 12 ;  pp = w1 & 3        (pp 2 = escritura para usuario, 3 = solo lectura)
+  ```
+  Es la misma cuenta que hace XNU al robar una PTE (`hw_vm.s:4342-4358`). XNU no usa el hash secundario: si ves el bit H (`w0 & 0x40`), anótalo aparte.
+- **Con `pmap = pmapTrans[space].pmapVAddr`, busca cuatro casos:**
+  1. `pmap` = 0 o 0xFFFFFFFF → PTE de un espacio que **ya no existe** (huérfana).
+  2. `pmap->ref_count == 0` (offset **+0x18**; `space` en **+0x14**, con `#pragma pack(4)`, `pmap.h:150-203` — compruébalo en `_pmap_destroy` con otool) → PTE de un **pmap muerto en la lista libre** → (A).
+  3. `pmap_find_phys(pmap, ea) != rpn` (0 o distinto) → la PTE **no coincide** con el pmap → (A).
+  4. Para 0xA0000000 ≤ ea < 0xB0000000 con `pp == 2`: apunta rpn → space. **El mismo rpn con escritura en dos espacios** = alias en los datos de las bibliotecas. Si los dos pmap devuelven ese rpn con `pmap_find_phys` → (B); si uno no → (A).
+- **Validación de la fórmula:** en un sysctl llamado desde un proceso, coge una dirección de su pila, saca `space` de `get_map_pmap(current_map())` y comprueba que el escaneo encuentra una PTE con ese `space`/`ea` y el mismo `rpn` que da `pmap_find_phys`.
+- **Cómo lanzarlo:** con interrupciones activas, y vuelve a mirar cada caso 10 ms después; informa solo de los que sigan. Lánzalo cada 5 s mientras corren `alias` y los bucles de `grolbp`/`$(date)`. **Un solo caso 1–4 que persista es la prueba.**
+
+### E. Si vuelve un `cp=MAL`, mira la forma del daño
+```sh
+cmp -l origen copia | head; cmp -l origen copia | wc -l
+dd if=copia bs=4096 skip=<offset/4096> count=1 2>/dev/null | hexdump -C | head -40
+```
+- Si el daño ocupa **exactamente 4096 bytes alineados** → alias de página.
+- Si son **32 bytes** → una línea de caché.
+- Mira si el contenido parece de otro proceso (cadenas, punteros 0xA…/0x9…).
+
+## 100.5 Pregunta 3: qué hacemos con el SMP
+- **Sí, da smp60 + lista blanca por bueno como hito.** Guarda el mkext, las fuentes (con etiqueta) y una copia del disco, y apúntalo en la bitácora. El 2× es real.
+- **Antes, una revalidación barata con la L2 del núcleo 1 encendida.** Es lo único nuevo de smp60 y cambia dónde viven las líneas sucias. Repite la tortura de atómicos (76.3), la prueba de `dcbz` (98.4.A) y la hora de carga: las tres se hicieron con esa L2 apagada.
+- **No empieces aún los stubs de userland (96.1).** El alias corrompe memoria de procesos **también en UP** y, por el `cp=MAL`, puede llegar a ficheros. Mientras exista, cualquier fallo con los stubs sería imposible de atribuir, y los stubs cambian binarios en disco.
+- **Primero el alias (100.4)**; después, stubs (96.1) y arranque temprano (96.3). Mientras tanto se puede usar SMP con lista blanca, con el fichero testigo `md5` y sin escrituras importantes.
+
+## 100.6 Orden
+1. Congela smp60: etiqueta, mkext, fuentes, copia del disco y bitácora.
+2. Con la L2 del núcleo 1 encendida: tortura de atómicos (76.3), prueba de `dcbz` (98.4.A) y 1 h de carga.
+3. **Wiintosh limpio en UP (100.4.A):** tasas de `grolbp`, `hdxml2manxml` y `$(date)`, y la prueba `alias` 10 min. Si no falla → bisección de lo nuestro.
+4. **Prueba `alias.c` (100.4.B)** en el sistema actual, en UP y en SMP, con la tabla de interpretación.
+5. **A/B `free_pmap_max = -1` (100.4.C)** con las mismas medidas, más `vm_stat` y `hwSteals`.
+6. Si no está claro: **escaneo de la tabla hash (100.4.D)**. Y si vuelve un `cp=MAL`, la forma del daño (100.4.E).
+7. Stubs de userland (96.1) y arranque temprano (96.3), solo cuando el alias esté explicado.
