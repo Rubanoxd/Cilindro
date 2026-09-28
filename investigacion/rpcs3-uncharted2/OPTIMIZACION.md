@@ -91,3 +91,32 @@ https://github.com/RPCS3/rpcs3-binaries-mac-arm64/releases.
 2. Si hay cierre: C1 (Disable ZCull Queries) como primera prueba, porque ataca la sincronización RSX con MoltenVK. Después C8.
 3. Si no hay cierre: medir el perfil A, luego C1 → C2 → C3/C4 → C5 → C6/C7, con el HUD de Metal para saber si el límite es la CPU.
 4. En paralelo, cuando haya tiempo: `build-m4.sh` con `PATCH=1` y comparación A/B con `RPCS3_MAC_BG_QOS=0`.
+
+---
+
+## 6. Análisis a fondo del M4 (ronda 2, tras los INFORMES #8–#10)
+
+Lo que ya está resuelto con parches propios:
+- **0002 — ZCull falso-visible:** con las consultas desactivadas, RPCS3 respondía «0 píxeles visibles» (`RSXThread.cpp`, `get_zcull_stats`) y el juego no dibujaba el 3D. Ahora responde N píxeles: la geometría vuelve y se eliminan todas las esperas a la GPU por oclusión. **Verificado en el Mac.**
+- **0003 — semáforos back-end relajados:** sin *host GPU labels* (MoltenVK no tiene `VK_EXT_external_memory_host`), cada escritura de etiqueta hacía un `sync()` completo de la GPU. Hizo desaparecer el mensaje `[SPU-PM] too many flags`, pero **no** arregló el cuelgue.
+
+### Hallazgos del código específicos de ARM64/macOS
+
+| # | Hallazgo | Dónde | Efecto en el M4 | Qué hacer |
+|---|---|---|---|---|
+| A | **Reservas SPU precisas** (valor por defecto) → cada PUTLLC toma `vm::writer_lock` (bloqueo pesado). Con la opción desactivada, SPURS usa una ruta rápida: copia directa más `compare_exchange` de 128 bits, que el M4 hace con CASP (LSE) en una sola instrucción. | `SPUThread.cpp:3460-3500` | Es exactamente la contención que se ve: 27 000 GETLLAR lentos y 5 SPU atascados en el mismo sitio | **K4** de la ORDEN #11 (`Accurate SPU Reservations: false`). Es el ajuste con más fundamento. |
+| B | GETLLAR espera con `busy_wait(300)` y, pasadas 24 vueltas, `std::this_thread::yield()`. En macOS, `yield` es `swtch_pri` y cede el núcleo entero a otro hilo. | `SPUThread.cpp:4571-4580` | Con solo 4 núcleos P, los hilos que ceden el núcleo pueden acabar en los núcleos E | K2/K3 (spin del GETLLAR, espera activa) |
+| C | El reloj ARM del M4 va a 24 MHz. `busy_wait` escala con `freq/30 MHz`, que aquí da 0 y se fuerza a 1. Resultado: esperas 1,25 veces más largas que en x86. | `util/asm.hpp:195-216` | Pequeño | No compensa parchearlo |
+| D | **Páginas de 16 KB en macOS/ARM.** La caché de texturas y la memoria del PS3 protegen páginas de 4 KB, pero `mprotect` las redondea a 16 KB. | `util/vm_native.cpp:325`, `Memory/vm.cpp:747` | Escribir en datos vecinos de una textura provoca fallos de página falsos: una excepción Mach cara en macOS más la invalidación de la caché. Probablemente cuesta FPS en general. | No se arregla con configuración. Se reduce con `Write Color Buffers: false` (por defecto) y resolución al 100 %. Un parche real sería grande. |
+| E | El JIT del PPU y del SPU ya se genera para `apple-m4` (LLVM 22). | `JITLLVM.cpp:562` | — | Nada que ganar ahí |
+| F | La **QoS** de los hilos es la única forma de repartir núcleos P/E; macOS ignora la afinidad. | `Thread.cpp:2772` | Hecho en el parche 0001 | Hay que medirlo A/B cuando el juego sea jugable |
+| G | La build oficial compila el propio emulador para armv8.4-a; la nuestra, para el M4 nativo. | `ConfigureCompiler.cmake` | Pequeño (0-5 %) | Hecho (`build-m4.sh`) |
+
+### Perfil objetivo "UC2-M4" (cuando deje de colgarse)
+Con el build custom (0001+0002+0003):
+- Video: `Disable ZCull Occlusion Queries: true`, `ZCull Fake ZPass Value: 4096`, `Relaxed Back-End Semaphores: true`, `Resolution Scale: 100`, `MSAA: Disabled`, `Shader Mode: Async Recompiler with Shader Interpreter`, `Write Color Buffers: false`.
+- Core: `Accurate SPU Reservations: false` (si K4 funciona), `RSX FIFO Fetch Accuracy: Fast`, `SPU Block Size: Mega` y `SPU loop detection: true` (probar después), `Preferred SPU Threads: 2-4` (probar).
+- Después: v01.09 más el parche de comunidad «Enable GPU Lighting», que pasa la iluminación del SPU a la GPU. Es la mayor rebaja de carga de SPU disponible, y el M4 tiene GPU de sobra.
+
+### Si K1–K7 no arreglan el cuelgue
+Hay que ver en qué función exacta del host están los 5 SPU. Para eso la ORDEN #11 pide un `lldb bt` o una build RelWithDebInfo. Con ese dato el parche siguiente irá dirigido a esa función, sin más tanteo.
