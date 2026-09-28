@@ -4,6 +4,7 @@
 #   - opcional (PATCH=1): todos los parches 000*.patch de esta carpeta
 #       0001 QoS de hilos compiladores (núcleos P para la emulación)
 #       0002 "ZCull Fake ZPass Value": con consultas ZCull desactivadas, informar píxeles visibles en vez de 0
+#       0003 "Relaxed Back-End Semaphores": escribir etiquetas del RSX sin esperar a la GPU entera
 # Reutiliza los scripts de CI de RPCS3 (.ci/build-mac.sh + .ci/deploy-mac.sh), que ya meten
 # MoltenVK 1.4.2 "privateapi" dentro de la app, como la build oficial.
 #
@@ -39,6 +40,8 @@ export BUILD_ARTIFACTSTAGINGDIRECTORY="$SRC/artifacts"
 export RELEASE_MESSAGE="../GitHubReleaseMessage.txt"
 mkdir -p "$BUILD_ARTIFACTSTAGINGDIRECTORY"
 
+# SDK 27: protobuf necesita float.h (FLT_DIG/FLT_EPSILON)
+export CXXFLAGS="-include float.h"
 .ci/build-mac.sh
 
 # Comprobar que de verdad se compiló con -march=native (si sale armv8.4-a, el compilador no lo aceptó)

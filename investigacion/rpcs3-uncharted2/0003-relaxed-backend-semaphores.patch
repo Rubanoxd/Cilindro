@@ -1,0 +1,32 @@
+diff --git a/rpcs3/Emu/RSX/NV47/HW/nv4097.cpp b/rpcs3/Emu/RSX/NV47/HW/nv4097.cpp
+index 313daf1..58a378d 100644
+--- a/rpcs3/Emu/RSX/NV47/HW/nv4097.cpp
++++ b/rpcs3/Emu/RSX/NV47/HW/nv4097.cpp
+@@ -786,6 +786,15 @@ namespace rsx
+ 			}
+ 
+ 			const u32 val = (arg & 0xff00ff00) | ((arg & 0xff) << 16) | ((arg >> 16) & 0xff);
++
++			if (g_cfg.video.relaxed_backend_semaphores && !g_cfg.video.strict_rendering_mode) [[ unlikely ]]
++			{
++				// Without host GPU labels (e.g. MoltenVK) every release is a full GPU sync. Games that poll these labels
++				// from SPU/PPU every frame (Uncharted 2) end up waiting on the host GPU constantly. Only flush DMA.
++				util::write_gcm_label<true, false>(ctx, reg, addr, val);
++				return;
++			}
++
+ 			util::write_gcm_label<true, true>(ctx, reg, addr, val);
+ 		}
+ 
+diff --git a/rpcs3/Emu/system_config.h b/rpcs3/Emu/system_config.h
+index 44f3eb5..74247f6 100644
+--- a/rpcs3/Emu/system_config.h
++++ b/rpcs3/Emu/system_config.h
+@@ -144,6 +144,7 @@ struct cfg_root : cfg::node
+ 		cfg::_enum<framebuffer_aliasing_bias> fb_aliasing_bias{ this, "Framebuffer Aliasing Heuristic Bias", framebuffer_aliasing_bias::_auto, true };
+ 		cfg::_bool disable_zcull_queries{ this, "Disable ZCull Occlusion Queries", false, true };
+ 		cfg::uint<0, 0xffffff> zcull_fake_zpass_value{ this, "ZCull Fake ZPass Value", 0, true }; // With queries disabled, report this many passing pixels instead of 0 (0 = off)
++		cfg::_bool relaxed_backend_semaphores{ this, "Relaxed Back-End Semaphores", false, true }; // Write back-end semaphore labels without a full GPU pipeline sync
+ 		cfg::_bool disable_video_output{ this, "Disable Video Output", false, true };
+ 		cfg::_bool disable_vertex_cache{ this, "Disable Vertex Cache", false };
+ 		cfg::_bool disable_FIFO_reordering{ this, "Disable FIFO Reordering", false };
