@@ -109,10 +109,10 @@ Video:
   Renderer: Vulkan
   Resolution Scale: 100
   MSAA: Disabled
-  Shader Mode: Async Shader Recompiler
+  Shader Mode: Async Recompiler with Shader Interpreter  # otros modos: pantalla negra en este Mac
   Write Color Buffers: false
   Strict Rendering Mode: false
-  Relaxed ZCULL Sync: true
+  Relaxed ZCULL Sync: false
   Multithreaded RSX: false
   Anisotropic Filter Override: 0
   Frame limit: Auto

@@ -16,10 +16,10 @@ Video:
   Renderer: Vulkan
   Resolution Scale: 100           # ver fase 3: 150 + parche "Disable SPU Post-processing"
   MSAA: Disabled                  # el driver de Apple no soporta las funciones MSAA que RPCS3 necesita
-  Shader Mode: Async Shader Recompiler
+  Shader Mode: Async Recompiler with Shader Interpreter  # otros modos: pantalla negra en este Mac
   Write Color Buffers: false
   Strict Rendering Mode: false
-  Relaxed ZCULL Sync: true        # +FPS conocido en este juego
+  Relaxed ZCULL Sync: false       # true rompe los shader workers en este Mac (VKProgramPipeline.cpp:688)
   Multithreaded RSX: false        # en 4 núcleos P suele restar; probar solo al final
   Anisotropic Filter Override: 0
   Frame limit: Auto
