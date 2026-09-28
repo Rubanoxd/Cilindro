@@ -1,0 +1,30 @@
+# Config por juego para RPCS3 (Uncharted 2, BCES00757 / BCUS98123)
+# Copiar a: ~/Library/Application Support/rpcs3/config/custom_configs/config_<SERIAL>.yml
+# Claves verificadas contra rpcs3/Emu/system_config.h (master 105c498, 28-09-2026).
+# Perfil A = "estable". Las alternativas a probar van comentadas (ver PLAN.md, fase 2).
+Core:
+  PPU Decoder: Recompiler (LLVM)
+  SPU Decoder: Recompiler (LLVM)
+  SPU Block Size: Mega            # probar: Safe (si hay cuelgues) / Giga
+  SPU loop detection: true        # libera tiempo de CPU en bucles de espera de SPURS
+  Preferred SPU Threads: 0        # probar 2..4 (el M4 base solo tiene 4 núcleos P)
+  Max SPURS Threads: 6            # probar 4 (clave en 4P+6E); bajar solo si mejora
+  SPU XFloat Accuracy: Approximate   # "Relaxed" = +FPS pero capítulos que no cargan
+  Accurate RSX reservation access: false
+  Thread Scheduler Mode: Operating System   # probar "RPCS3 Scheduler" si hay tirones
+Video:
+  Renderer: Vulkan
+  Resolution Scale: 100           # ver fase 3: 150 + parche "Disable SPU Post-processing"
+  MSAA: Disabled                  # el driver de Apple no soporta las funciones MSAA que RPCS3 necesita
+  Shader Mode: Async Shader Recompiler
+  Write Color Buffers: false
+  Strict Rendering Mode: false
+  Relaxed ZCULL Sync: true        # +FPS conocido en este juego
+  Multithreaded RSX: false        # en 4 núcleos P suele restar; probar solo al final
+  Anisotropic Filter Override: 0
+  Frame limit: Auto
+  Vulkan:
+    Asynchronous Texture Streaming: false   # incompatible con GPUs Apple (lo avisa el log)
+  Performance Overlay:
+    Enabled: true
+    Detail level: High
