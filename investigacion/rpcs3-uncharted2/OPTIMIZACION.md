@@ -120,3 +120,31 @@ Con el build custom (0001+0002+0003):
 
 ### Si K1–K7 no arreglan el cuelgue
 Hay que ver en qué función exacta del host están los 5 SPU. Para eso la ORDEN #11 pide un `lldb bt` o una build RelWithDebInfo. Con ese dato el parche siguiente irá dirigido a esa función, sin más tanteo.
+
+---
+
+## 7. U2M4 — la build propia (ronda 3)
+
+**U2M4** = RPCS3 `105c4988` + parches 0001–0006, compilado para el M4 con `build-m4.sh` → `/Applications/U2M4.app`.
+
+| Parche | Qué hace | Estado |
+|---|---|---|
+| 0001 | Baja la QoS de los hilos que compilan (shaders/LLVM) para dejar los 4 núcleos P a la emulación | compila; sin medir A/B |
+| 0002 | `ZCull Fake ZPass Value`: con consultas ZCull desactivadas, informa de N píxeles visibles en vez de 0 | recupera el 3D, pero rompe los datos de partículas (assert `particle-u2-cull.cpp:304`) |
+| 0003 | `Relaxed Back-End Semaphores`: etiquetas RSX sin sincronizar toda la GPU (MoltenVK no tiene host labels) | quita el mensaje `SPU-PM too many flags` |
+| 0004 | `SPU Heuristics Host Thread Count`: las heurísticas de espera SPU asumían ≥12 hilos (M4 base = 10) | sin efecto sobre el cuelgue |
+| 0005 | **Bug de RPCS3 corregido:** el intérprete de shaders no declaraba el binding del renderizado condicional emulado ("Invalid input structure") | **verificado** (0 errores) |
+| 0006 | `Emulated Conditional Rendering`: renderizado condicional en la GPU sin retrasar los informes ZCULL | pendiente (ORDEN #16) |
+
+### Candidatos de optimización para cuando el juego sea estable (en orden)
+1. **`PPU Vector NaN Handling: false`** (Core). Con el valor por defecto (`true`), cada operación vectorial de coma flotante del PPU pasa por `VecHandleNan` (`PPUTranslator.cpp:487`), que añade instrucciones extra en ARM. El hilo principal del juego se pasa el tiempo ejecutando código del PPU, así que es una ganancia directa en la CPU. Riesgo: fallos visuales o de física si el juego depende de los NaN. Obliga a recompilar la caché del PPU (el primer arranque será más largo).
+2. **Parche de la comunidad "Enable GPU Lighting"** (v01.09): pasa la iluminación del SPU a la GPU. Es la mayor rebaja de carga del SPU disponible.
+3. `SPU Block Size: Mega`, `SPU loop detection: true`, `Preferred SPU Threads: 2-4`: probarlos uno a uno.
+4. `SPU XFloat Accuracy: Relaxed`, solo si algo del resto falla por poco. Riesgo: capítulos que no cargan.
+5. **`Frame limit: 30`**: el juego ya va a 30. Limitarlo evita gastar energía en picos (las cinemáticas a 60) y retrasa el throttling térmico del Air sin ventilador.
+6. **A/B de QoS** (0001): lanzar con `RPCS3_MAC_BG_QOS=0` y sin él.
+7. **Parche grande (último recurso):** agrupar la protección de páginas de la caché de texturas en bloques de 16 KB para reducir fallos de página falsos en macOS/ARM (`util/vm_native.cpp:325`). Solo si el perfil de CPU muestra mucho tiempo en el manejador de fallos (`sample` → `signal_handler`/`handle_access_violation`).
+
+### Cómo medir en el Mac
+- FPS: el overlay de RPCS3, media y mínimo en 60 s en el tren y en un combate.
+- Dónde se va la CPU: `sample <pid> 10`. Si domina el JIT del PPU, aplicar el candidato 1. Si dominan los SPU, el 2 y el 3. Si domina `handle_access_violation`, el 7. Si dominan las esperas del RSX o de MoltenVK, más trabajo en la GPU.

@@ -13,7 +13,7 @@
 #
 # Requisitos: Xcode Command Line Tools, MacPorts, ~15 GB libres, 30-60 min.
 # Uso:   PATCH=1 REV=master sh build-m4.sh
-# Salida: ~/rpcs3-src/build/bin/RPCS3.app  -> se copia a /Applications/RPCS3-m4.app
+# Salida: /Applications/U2M4.app  (build "U2M4" = RPCS3 + parches para Uncharted 2 en M4)
 
 SRC="${SRC:-$HOME/rpcs3-src}"
 REV="${REV:-master}"
@@ -50,6 +50,13 @@ export CXXFLAGS="-include float.h"
 # Comprobar que de verdad se compiló con -march=native (si sale armv8.4-a, el compilador no lo aceptó)
 grep -o -m1 'march=[a-z0-9.+-]*' build/build.ninja || true
 
-rm -rf /Applications/RPCS3-m4.app
-cp -R build/bin/RPCS3.app /Applications/RPCS3-m4.app
-echo "OK: /Applications/RPCS3-m4.app  ($(git rev-parse --short=8 HEAD), PATCH=${PATCH:-0})"
+# Marca U2M4: RPCS3 afinado para Uncharted 2 en el M4
+APP=/Applications/U2M4.app
+rm -rf "$APP"
+cp -R build/bin/RPCS3.app "$APP"
+# deploy-mac.sh puede no incluir MoltenVK con USE_SYSTEM_MVK: garantizarlo
+[ -f "$APP/Contents/Frameworks/libMoltenVK.dylib" ] || cp build/bin/MoltenVK/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib "$APP/Contents/Frameworks/"
+plutil -replace CFBundleName -string "U2M4" "$APP/Contents/Info.plist"
+plutil -replace CFBundleDisplayName -string "U2M4" "$APP/Contents/Info.plist" 2>/dev/null || plutil -insert CFBundleDisplayName -string "U2M4" "$APP/Contents/Info.plist"
+codesign --force --deep --sign - "$APP"
+echo "OK: $APP  ($(git rev-parse --short=8 HEAD), PATCH=${PATCH:-0})"
