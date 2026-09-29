@@ -59,6 +59,16 @@ cp -R build/bin/RPCS3.app "$APP"
 [ -f "$APP/Contents/Frameworks/libMoltenVK.dylib" ] || cp build/bin/MoltenVK/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib "$APP/Contents/Frameworks/"
 plutil -replace CFBundleName -string "U2M4" "$APP/Contents/Info.plist"
 plutil -replace CFBundleDisplayName -string "U2M4" "$APP/Contents/Info.plist" 2>/dev/null || plutil -insert CFBundleDisplayName -string "U2M4" "$APP/Contents/Info.plist"
+# Icono U2M4 (PNG 1024 sin fondo -> .icns)
+ICONSET="$(mktemp -d)/U2M4.iconset"; mkdir -p "$ICONSET"
+for sz in 16 32 128 256 512; do
+  sips -z $sz $sz "$HERE/icono/U2M4-1024.png" --out "$ICONSET/icon_${sz}x${sz}.png" >/dev/null
+  sips -z $((sz*2)) $((sz*2)) "$HERE/icono/U2M4-1024.png" --out "$ICONSET/icon_${sz}x${sz}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/U2M4.icns"
+plutil -replace CFBundleIconFile -string "U2M4.icns" "$APP/Contents/Info.plist"
+plutil -remove CFBundleIconName "$APP/Contents/Info.plist" 2>/dev/null || true
+
 U2M4_VER="$(cat "$HERE/VERSION")"
 plutil -replace CFBundleShortVersionString -string "$U2M4_VER" "$APP/Contents/Info.plist"
 codesign --force --deep --sign - "$APP"
