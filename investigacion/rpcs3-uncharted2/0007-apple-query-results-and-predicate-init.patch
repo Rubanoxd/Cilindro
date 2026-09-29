@@ -1,0 +1,51 @@
+diff --git a/rpcs3/Emu/RSX/VK/VKGSRender.cpp b/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+index 9652539..bce21bd 100644
+--- a/rpcs3/Emu/RSX/VK/VKGSRender.cpp
++++ b/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+@@ -2186,6 +2186,27 @@ void VKGSRender::load_program_env()
+ 
+ 	if (vk::emulate_conditional_rendering())
+ 	{
++		if (!m_cond_render_buffer)
++		{
++			// One-time: transfer commands are not allowed inside a renderpass
++			if (vk::is_renderpass_open(*m_current_command_buffer))
++			{
++				vk::end_renderpass(*m_current_command_buffer);
++			}
++
++			// Create the predicate buffer up front so that "no conditional rendering" binds the all-ones word
++			// instead of uninitialized scratch memory (which reads as 0 and culls every draw).
++			m_cond_render_buffer = std::make_unique<vk::buffer>(
++				*m_device, 8,
++				m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
++				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_UNDEFINED);
++
++			vkCmdFillBuffer(*m_current_command_buffer, m_cond_render_buffer->value, 4, 4, 0xFFFFFFFFu);
++			vk::insert_buffer_memory_barrier(*m_current_command_buffer, m_cond_render_buffer->value, 4, 4,
++				VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
++				VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
++		}
++
+ 		const vk::buffer& predicate = m_cond_render_buffer ? *m_cond_render_buffer : *vk::get_scratch_buffer(*m_current_command_buffer, 4, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_ACCESS_NONE);
+ 		const u32 offset = cond_render_ctrl.hw_cond_active ? 0 : 4;
+ 		m_program->bind_uniform({ predicate, offset, 4 }, vk::glsl::binding_set_index_vertex, m_vs_binding_table->cr_pred_buffer_location);
+diff --git a/rpcs3/Emu/RSX/VK/VKQueryPool.cpp b/rpcs3/Emu/RSX/VK/VKQueryPool.cpp
+index bcd00a9..d9f479d 100644
+--- a/rpcs3/Emu/RSX/VK/VKQueryPool.cpp
++++ b/rpcs3/Emu/RSX/VK/VKQueryPool.cpp
+@@ -187,6 +187,14 @@ namespace vk
+ 	{
+ 		// We're technically supposed to stop any active renderpasses before streaming the results out, but that doesn't matter on IMR hw
+ 		// On TBDR setups like the apple M series, the stop is required (results are all 0 if you don't flush the RP), but this introduces a very heavy performance loss.
++#ifdef __APPLE__
++		// Apple GPUs (TBDR): without ending the renderpass the copied results are all 0, which makes the emulated
++		// conditional rendering predicate cull everything. Correctness first; the renderpass is reopened on the next draw.
++		if (vk::is_renderpass_open(cmd))
++		{
++			vk::end_renderpass(cmd);
++		}
++#endif
+ 		vkCmdCopyQueryPoolResults(cmd, *query_slot_status[index].pool, index, count, dst, dst_offset, 4, VK_QUERY_RESULT_WAIT_BIT);
+ 	}
+ 

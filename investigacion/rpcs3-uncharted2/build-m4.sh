@@ -8,6 +8,7 @@
 #       0004 "SPU Heuristics Host Thread Count": las heurísticas de espera SPU asumen >=12 hilos (M4 base = 10)
 #       0005 Fix: el intérprete de shaders no declaraba el binding del renderizado condicional emulado (Relaxed ZCULL en MoltenVK)
 #       0006 "Emulated Conditional Rendering": cond. render en GPU (predicado en shader) sin relajar los informes ZCULL
+#       0007 GPU Apple: cerrar render pass antes de copiar resultados de consultas (si no, llegan a 0) + predicado inicial "visible"
 # Reutiliza los scripts de CI de RPCS3 (.ci/build-mac.sh + .ci/deploy-mac.sh), que ya meten
 # MoltenVK 1.4.2 "privateapi" dentro de la app, como la build oficial.
 #
