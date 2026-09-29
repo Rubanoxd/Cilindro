@@ -10,6 +10,7 @@
 #       0006 "Emulated Conditional Rendering": cond. render en GPU (predicado en shader) sin relajar los informes ZCULL
 #       0007 GPU Apple: cerrar render pass antes de copiar resultados de consultas (si no, llegan a 0) + predicado inicial "visible"
 #       0008 ARM64: barreras de memoria en las DMA del SPU (x86 ordena solo, ARM no) — JIT + C++
+#       0009 Caché persistente de objetos SPU (RPCS3 solo la guarda con SPU Debug): arranques sin recompilar ~9k funciones
 # Reutiliza los scripts de CI de RPCS3 (.ci/build-mac.sh + .ci/deploy-mac.sh), que ya meten
 # MoltenVK 1.4.2 "privateapi" dentro de la app, como la build oficial.
 #
