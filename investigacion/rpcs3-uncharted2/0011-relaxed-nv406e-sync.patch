@@ -1,0 +1,44 @@
+diff --git a/rpcs3/Emu/RSX/NV47/HW/nv406e.cpp b/rpcs3/Emu/RSX/NV47/HW/nv406e.cpp
+index fd8ec80..130167e 100644
+--- a/rpcs3/Emu/RSX/NV47/HW/nv406e.cpp
++++ b/rpcs3/Emu/RSX/NV47/HW/nv406e.cpp
+@@ -13,7 +13,12 @@ namespace rsx
+ 	{
+ 		void set_reference(context* ctx, u32 /*reg*/, u32 arg)
+ 		{
+-			RSX(ctx)->sync();
++			// U2M4: on MoltenVK a full sync here takes long enough for games that poll the reference (Uncharted 2 "RsxKick")
++			// to time out and then double-count the late completion ("[SPU-PM] too many flags").
++			if (!g_cfg.video.relaxed_406e_sync || g_cfg.video.strict_rendering_mode)
++			{
++				RSX(ctx)->sync();
++			}
+ 
+ 			// Write ref+get (get will be written again with the same value at command end)
+ 			auto& dma = *vm::_ptr<RsxDmaControl>(RSX(ctx)->dma_address);
+@@ -134,6 +139,13 @@ namespace rsx
+ 				arg = 1;
+ 			}
+ 
++			if (g_cfg.video.relaxed_406e_sync && !g_cfg.video.strict_rendering_mode) [[ unlikely ]]
++			{
++				// See set_reference: publish the label as soon as the RSX thread reaches it
++				util::write_gcm_label<false, false>(ctx, reg, addr, arg);
++				return;
++			}
++
+ 			util::write_gcm_label<false, true>(ctx, reg, addr, arg);
+ 		}
+ 	}
+diff --git a/rpcs3/Emu/system_config.h b/rpcs3/Emu/system_config.h
+index 458ec8e..2c9e1ba 100644
+--- a/rpcs3/Emu/system_config.h
++++ b/rpcs3/Emu/system_config.h
+@@ -145,6 +145,7 @@ struct cfg_root : cfg::node
+ 		cfg::_enum<framebuffer_aliasing_bias> fb_aliasing_bias{ this, "Framebuffer Aliasing Heuristic Bias", framebuffer_aliasing_bias::_auto, true };
+ 		cfg::_bool disable_zcull_queries{ this, "Disable ZCull Occlusion Queries", false, true };
+ 		cfg::uint<0, 0xffffff> zcull_fake_zpass_value{ this, "ZCull Fake ZPass Value", 0, true }; // With queries disabled, report this many passing pixels instead of 0 (0 = off)
++		cfg::_bool relaxed_406e_sync{ this, "Relaxed NV406E Sync", false, true }; // NV406E semaphore release / set reference without a full host GPU sync (MoltenVK latency trips guest timeouts)
+ 		cfg::_bool relaxed_backend_semaphores{ this, "Relaxed Back-End Semaphores", false, true }; // Write back-end semaphore labels without a full GPU pipeline sync
+ 		cfg::_bool disable_video_output{ this, "Disable Video Output", false, true };
+ 		cfg::_bool disable_vertex_cache{ this, "Disable Vertex Cache", false };

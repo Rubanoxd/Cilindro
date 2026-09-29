@@ -12,6 +12,7 @@
 #       0008 ARM64: barreras de memoria en las DMA del SPU (x86 ordena solo, ARM no) — JIT + C++
 #       0009 Caché persistente de objetos SPU (RPCS3 solo la guarda con SPU Debug): arranques sin recompilar ~9k funciones
 #       0010 GETLLAR del SPU: barrera acquire en la lectura tipo seqlock (ARM puede aceptar líneas de 128 B a medio escribir)
+#       0011 "Relaxed NV406E Sync": semáforo NV406E y set_reference sin sync completo de GPU (latencia MoltenVK → timeouts RsxKick del juego)
 # Reutiliza los scripts de CI de RPCS3 (.ci/build-mac.sh + .ci/deploy-mac.sh), que ya meten
 # MoltenVK 1.4.2 "privateapi" dentro de la app, como la build oficial.
 #
