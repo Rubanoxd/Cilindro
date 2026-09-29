@@ -1,0 +1,61 @@
+diff --git a/rpcs3/Emu/RSX/VK/VKShaderInterpreter.cpp b/rpcs3/Emu/RSX/VK/VKShaderInterpreter.cpp
+index 9ef7491..e836561 100644
+--- a/rpcs3/Emu/RSX/VK/VKShaderInterpreter.cpp
++++ b/rpcs3/Emu/RSX/VK/VKShaderInterpreter.cpp
+@@ -1,6 +1,7 @@
+ #include "stdafx.h"
+ 
+ #include "VKShaderInterpreter.h"
++#include "Emu/system_config.h"
+ #include "VKVertexProgram.h"
+ #include "VKFragmentProgram.h"
+ #include "VKHelpers.h"
+@@ -611,6 +612,13 @@ namespace vk
+ 			{
+ 				m_current_interpreter = found->second.program;
+ 
++				if (!m_current_interpreter)
++				{
++					// U2M4: background link still in flight, skip this draw and look again next time
++					m_current_key = {};
++					return nullptr;
++				}
++
+ 				if ((found->second.flags & (CACHED_PIPE_UNOPTIMIZED | CACHED_PIPE_RECOMPILING)) == CACHED_PIPE_UNOPTIMIZED)
+ 				{
+ 					found->second.flags |= CACHED_PIPE_RECOMPILING;
+@@ -621,6 +629,22 @@ namespace vk
+ 			}
+ 		}
+ 
++		if (g_cfg.video.async_interpreter_link)
++		{
++			// U2M4: a synchronous link here blocks the RSX thread for hundreds of ms on MoltenVK (huge interpreter shaders
++			// -> Metal pipeline compile). Uncharted 2's RsxKick watchdog (~0.3 s) fires and its SPU job manager desyncs.
++			// Link in the background with a null placeholder; draws using this state are skipped until it lands.
++			{
++				std::lock_guard lock(m_program_cache_lock);
++				m_program_cache[key] = pipeline_cache_entry_t{ .flags = CACHED_PIPE_RECOMPILING, .program = nullptr };
++			}
++
++			link(properties, key.compiler_opt, true, {});
++			m_current_interpreter = nullptr;
++			m_current_key = {};
++			return nullptr;
++		}
++
+ 		const auto start = std::chrono::steady_clock::now();
+ 
+ 		m_current_interpreter = link(properties, key.compiler_opt);
+diff --git a/rpcs3/Emu/system_config.h b/rpcs3/Emu/system_config.h
+index 2c9e1ba..36b05af 100644
+--- a/rpcs3/Emu/system_config.h
++++ b/rpcs3/Emu/system_config.h
+@@ -145,6 +145,7 @@ struct cfg_root : cfg::node
+ 		cfg::_enum<framebuffer_aliasing_bias> fb_aliasing_bias{ this, "Framebuffer Aliasing Heuristic Bias", framebuffer_aliasing_bias::_auto, true };
+ 		cfg::_bool disable_zcull_queries{ this, "Disable ZCull Occlusion Queries", false, true };
+ 		cfg::uint<0, 0xffffff> zcull_fake_zpass_value{ this, "ZCull Fake ZPass Value", 0, true }; // With queries disabled, report this many passing pixels instead of 0 (0 = off)
++		cfg::_bool async_interpreter_link{ this, "Async Shader Interpreter Link", false, true }; // Never link interpreter pipelines on the RSX thread; skip the draw until the background link finishes
+ 		cfg::_bool relaxed_406e_sync{ this, "Relaxed NV406E Sync", false, true }; // NV406E semaphore release / set reference without a full host GPU sync (MoltenVK latency trips guest timeouts)
+ 		cfg::_bool relaxed_backend_semaphores{ this, "Relaxed Back-End Semaphores", false, true }; // Write back-end semaphore labels without a full GPU pipeline sync
+ 		cfg::_bool disable_video_output{ this, "Disable Video Output", false, true };

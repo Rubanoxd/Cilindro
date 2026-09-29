@@ -10,4 +10,5 @@ La versión actual está en `VERSION`; `build-m4.sh` la graba en la app (Acerca 
 | 0.3 | 105c4988 | 0001–0008 | arranque en frío falla (assert VDEC por compilar ~9k funciones SPU en vivo), con y sin fence |
 | 0.4 | 105c4988 | 0001–0009 | con caché caliente llega a JUGAR 3/3, se congela 3/3 (RsxKick → SPU-PM too many flags) |
 | 0.5 | 105c4988 | 0001–0010 | juega 1-2 min y se congela (RsxKick → too many flags); x86+Rosetta falla igual pero más tarde → no es (solo) orden de memoria |
-| 0.6 | 105c4988 | 0001–0011 | en pruebas (ORDEN #26) |
+| 0.6 | 105c4988 | 0001–0011 | juega 13 s–3,5 min; 7/7 cuelgues empiezan 0,3 s tras un programa RSX nuevo |
+| 0.7 | 105c4988 | 0001–0012 | en pruebas (ORDEN #29) |
