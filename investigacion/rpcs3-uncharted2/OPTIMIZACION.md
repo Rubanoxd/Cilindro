@@ -181,3 +181,33 @@ Los chips Apple tienen un **modo TSO por hardware**: el mismo orden de memoria q
 - **Renderizador Metal nativo:** fuera de alcance. Es un backend entero nuevo.
 - **Tamaño de página de 16 KB:** agrupar las protecciones de página de la caché de texturas (sección 6, D).
 - **Quitar comprobaciones que UC2 no necesita:** con el perfil U2M4 fijo, eliminar las rutas de precisión que el juego no usa, guiándonos por `sample`.
+
+---
+
+## 9. Rendimiento en ARM / M4 (ronda 5): lo concreto
+
+### 9.1 ¿El JIT genera código para el M4 o para un Cortex-A78? (verificar ya)
+- El JIT de PPU y SPU le pide a LLVM la CPU del host con `getHostCPUName()` (`Utilities/JITLLVM.cpp:562`). Si LLVM devuelve "generic", RPCS3 intenta detectarla leyendo el registro MIDR. En macOS esa lectura **no está implementada** (`AArch64Common.cpp:117-136`, devuelve 0), así que cae a **"cortex-a78"** (`JITLLVM.cpp:~1040`). El propio código lo reconoce: *"the cortex-a78 fallback on Apple silicon"* (`JITLLVM.cpp:747-750`).
+- Con LLVM 22 debería salir `apple-m4`, pero en #17597 las builds con LLVM 19 salían como "M3". **Comprobación sin compilar:** los objetos de la caché PPU llevan la CPU en el nombre (`PPUThread.cpp:5555`, `v8-kusa-…-<cpu>.obj`):
+  `ls ~/Library/Caches/rpcs3/cache/BCES00757/ppu-*/ | sed 's/.*-//' | sort | uniq -c`
+- Si no aparece `apple-m4`: poner **`Core: Use LLVM CPU: apple-m4`**. Obliga a recompilar las cachés de PPU y SPU, pero el código queda ajustado al M4: planificación de instrucciones, latencias y extensiones.
+
+### 9.2 Menos hilos SPURS que núcleos rápidos
+El M4 del Air tiene **4 núcleos P**. UC2 lanza 6 núcleos SPURS que se pasan el tiempo sondeando memoria. Con `Max SPURS Threads: 4`:
+- hay menos hilos compitiendo por los 4 núcleos P, y menos acabando en los núcleos E;
+- hay menos contención en la línea de 128 bytes de SPURS (la de las "flags");
+- probablemente sube el rendimiento y **baja el riesgo de los cuelgues de sincronización**. Riesgo: algún trabajo SPU tarda más en arrancar.
+
+### 9.3 Energía = rendimiento en un Air sin ventilador
+En un portátil sin ventilador, cada vatio gastado en esperas activas es rendimiento que se pierde por temperatura:
+- `SPU loop detection: true`: detecta los bucles de espera de los SPU y cede el núcleo.
+- `SPU Reservation Busy Waiting Enabled: false` (valor por defecto; no activarlo).
+- `Frame limit: 30`: el juego ya va a 30; así no se gasta energía en las cinemáticas a 60.
+- Idea de parche futuro: en ARM, `utils::pause()` usa `isb` (`util/asm.hpp:181`). En esperas largas, `wfe` con monitor exclusivo duerme el núcleo hasta que cambie la línea observada. Consume menos y el chip se calienta menos.
+
+### 9.4 PPU
+- `PPU Vector NaN Handling: false`: quita las correcciones de NaN de cada operación vectorial (sección 7).
+- Ya confirmado: el JIT activa `+dotprod`, `+i8mm` y `+sha3` si el chip los tiene, y **no** SVE (el M4 no tiene SVE normal).
+
+### 9.5 PGO de U2M4 (cuando sea estable)
+Una build instrumentada, 10 min de juego y una recompilación con el perfil obtenido (sección 8): +5-15 % típico en el código C++ del emulador (RSX, DMA, reservas).
