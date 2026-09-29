@@ -1,0 +1,71 @@
+diff --git a/rpcs3/Emu/Cell/SPULLVMRecompiler.cpp b/rpcs3/Emu/Cell/SPULLVMRecompiler.cpp
+index c444e5e..7648aef 100644
+--- a/rpcs3/Emu/Cell/SPULLVMRecompiler.cpp
++++ b/rpcs3/Emu/Cell/SPULLVMRecompiler.cpp
+@@ -60,6 +60,8 @@ const extern spu_decoder<spu_iflag> g_spu_iflag;
+ #pragma GCC diagnostic pop
+ #endif
+ 
++extern const bool g_spu_arm_dma_fence; // SPUThread.cpp
++
+ #ifdef ARCH_ARM64
+ #include "Emu/CPU/Backends/AArch64/AArch64JIT.h"
+ 
+@@ -5317,6 +5319,12 @@ public:
+ 					m_ir->CreateBr(next);
+ 					m_ir->SetInsertPoint(copy);
+ 
++					// See g_spu_arm_dma_fence (SPUThread.cpp): inline DMA is a plain copy, order it on ARM64
++					if (g_spu_arm_dma_fence)
++					{
++						m_ir->CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
++					}
++
+ 					llvm::Type* vtype = get_type<u8[16]>();
+ 
+ 					switch (csize)
+diff --git a/rpcs3/Emu/Cell/SPUThread.cpp b/rpcs3/Emu/Cell/SPUThread.cpp
+index 0c3f1d7..b790a23 100644
+--- a/rpcs3/Emu/Cell/SPUThread.cpp
++++ b/rpcs3/Emu/Cell/SPUThread.cpp
+@@ -2045,10 +2045,27 @@ void spu_thread::push_snr(u32 number, u32 value)
+ 	});
+ }
+ 
++// ARM64 is weakly ordered: plain memcpy-based DMA can make a later transfer (e.g. a completion flag) visible to the PPU or
++// another SPU before earlier data. x86 (TSO) hides this. Set RPCS3_ARM_DMA_FENCE=0 to disable for A/B testing.
++extern const bool g_spu_arm_dma_fence = []
++{
++#ifdef ARCH_ARM64
++	const char* env = ::getenv("RPCS3_ARM_DMA_FENCE");
++	return !env || env[0] != '0';
++#else
++	return false;
++#endif
++}();
++
+ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8* ls)
+ {
+ 	perf_meter<"DMA"_u32> perf_;
+ 
++	if (g_spu_arm_dma_fence)
++	{
++		atomic_fence_seq_cst();
++	}
++
+ 	const bool is_get = (args.cmd & ~(MFC_BARRIER_MASK | MFC_FENCE_MASK | MFC_START_MASK)) == MFC_GET_CMD;
+ 
+ 	u32 eal = args.eal;
+@@ -2878,6 +2895,12 @@ bool spu_thread::do_list_transfer(spu_mfc_cmd& args)
+ 	// Assume called with size greater than 0
+ 	while (true)
+ 	{
++		if (g_spu_arm_dma_fence)
++		{
++			// Order list elements (data vs. flag) on weakly ordered hosts
++			atomic_fence_seq_cst();
++		}
++
+ 		// Check if fetching is needed
+ 		if (index == fetch_size)
+ 		{
