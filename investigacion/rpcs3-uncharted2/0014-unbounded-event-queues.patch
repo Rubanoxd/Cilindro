@@ -1,0 +1,46 @@
+diff --git a/rpcs3/Emu/Cell/lv2/sys_event.cpp b/rpcs3/Emu/Cell/lv2/sys_event.cpp
+index b405788..dd0c7b3 100644
+--- a/rpcs3/Emu/Cell/lv2/sys_event.cpp
++++ b/rpcs3/Emu/Cell/lv2/sys_event.cpp
+@@ -4,6 +4,7 @@
+ #include "Emu/IdManager.h"
+ #include "Emu/IPC.h"
+ #include "Emu/System.h"
++#include "Emu/system_config.h"
+ 
+ #include "Emu/Cell/ErrorCodes.h"
+ #include "Emu/Cell/PPUThread.h"
+@@ -158,6 +159,21 @@ CellError lv2_event_queue::send(lv2_event event, bool* notified_thread, lv2_even
+ 			return {};
+ 		}
+ 
++		// U2M4: on a slower host the consuming PPU thread falls behind; dropping the event (EBUSY) loses job
++		// completion notifications for good. Keep it instead, and log it once in a while.
++		if (g_cfg.core.unbounded_event_queues)
++		{
++			static atomic_t<u32> s_overflows = 0;
++			if (u32 n = ++s_overflows; !(n & (n - 1)))
++			{
++				sys_event.warning("U2M4: event queue 0x%llx overflow kept (size=%u, total overflows=%u)", key, size, n);
++			}
++
++			events.emplace_back(event);
++			return {};
++		}
++
++		sys_event.error("U2M4: event DROPPED, queue full (key=0x%llx, size=%u)", key, size);
+ 		return CELL_EBUSY;
+ 	}
+ 
+diff --git a/rpcs3/Emu/system_config.h b/rpcs3/Emu/system_config.h
+index 36b05af..d737841 100644
+--- a/rpcs3/Emu/system_config.h
++++ b/rpcs3/Emu/system_config.h
+@@ -41,6 +41,7 @@ struct cfg_root : cfg::node
+ 		cfg::_bool spu_accurate_reservations{ this, "Accurate SPU Reservations", true };
+ 		cfg::_bool accurate_cache_line_stores{ this, "Accurate Cache Line Stores", false };
+ 		cfg::_bool rsx_accurate_res_access{this, "Accurate RSX reservation access", false, true};
++		cfg::_bool unbounded_event_queues{this, "Unbounded Event Queues", false, true}; // Never drop events on a full queue (slow host PPU consumers)
+ 		cfg::_bool ppu_reservation_priority_over_spu{this, "PPU Reservation Priority Over SPUs", false, true};
+ 
+ 		struct fifo_setting : public cfg::_enum<rsx_fifo_mode>

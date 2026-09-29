@@ -12,4 +12,5 @@ La versión actual está en `VERSION`; `build-m4.sh` la graba en la app (Acerca 
 | 0.5 | 105c4988 | 0001–0010 | juega 1-2 min y se congela (RsxKick → too many flags); x86+Rosetta falla igual pero más tarde → no es (solo) orden de memoria |
 | 0.6 | 105c4988 | 0001–0011 | juega 13 s–3,5 min; 7/7 cuelgues empiezan 0,3 s tras un programa RSX nuevo |
 | 0.7 | 105c4988 | 0001–0012 | 1/4 llega a jugar (~69 s); dos fallos distintos: livelock lwarx/stwcx en la carga y tormenta RsxKick jugando tras ráfagas de shaders |
-| 0.8 | 105c4988 | 0001–0013 | en pruebas (ORDEN #30) |
+| 0.8 | 105c4988 | 0001–0013 | hasta 8,5 min de juego y capítulo 3; RSX parado en JUMP-a-sí-mismo esperando un kick SPU que nunca llega |
+| 0.9 | 105c4988 | 0001–0014 | en pruebas (ORDEN #34) |

@@ -15,6 +15,7 @@
 #       0011 "Relaxed NV406E Sync": semáforo NV406E y set_reference sin sync completo de GPU (latencia MoltenVK → timeouts RsxKick del juego)
 #       0012 "Async Shader Interpreter Link": el intérprete ya no enlaza pipelines en el hilo RSX (bloqueaba cientos de ms en MoltenVK)
 #       0013 Diagnóstico: registra en el log la dirección de un STWCX del PPU que nunca gana la reserva (livelock de carga)
+#       0014 "Unbounded Event Queues": no descartar eventos SPU→PPU con la cola llena (EBUSY) + log de eventos descartados
 # Reutiliza los scripts de CI de RPCS3 (.ci/build-mac.sh + .ci/deploy-mac.sh), que ya meten
 # MoltenVK 1.4.2 "privateapi" dentro de la app, como la build oficial.
 #
