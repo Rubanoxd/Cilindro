@@ -148,3 +148,36 @@ Hay que ver en qué función exacta del host están los 5 SPU. Para eso la ORDEN
 ### Cómo medir en el Mac
 - FPS: el overlay de RPCS3, media y mínimo en 60 s en el tren y en un combate.
 - Dónde se va la CPU: `sample <pid> 10`. Si domina el JIT del PPU, aplicar el candidato 1. Si dominan los SPU, el 2 y el 3. Si domina `handle_access_violation`, el 7. Si dominan las esperas del RSX o de MoltenVK, más trabajo en la GPU.
+
+---
+
+## 8. Ideas específicas de ARM / Apple Silicon (ronda 4)
+
+### Corrección importante
+En la sección 6 dije que MoltenVK no tiene `VK_EXT_external_memory_host`. **Es falso**: lo tiene desde MoltenVK 1.2.3 (2023), y nosotros usamos la 1.4.2. Eso significa que **"Allow Host GPU Labels" podría funcionar de forma nativa en el Mac**. RPCS3 solo lo desactiva si el driver no tiene esa extensión (`VKGSRender.cpp:767-783`). Si funciona:
+- las etiquetas del RSX las escribe la propia GPU, sin que el emulador se pare a esperarla;
+- sustituye con ventaja al parche 0003 (semáforos relajados), que es un apaño menos seguro.
+→ **Primera prueba de la ORDEN #21.**
+
+### SVE / SME: no nos sirven (y por qué)
+- El M4 **no tiene SVE normal**. Tiene **SME2** (ARMv9), pero solo funciona en "modo streaming": una unidad aparte, orientada a matrices, con un coste alto de entrar y salir del modo. Las instrucciones SPU son operaciones sueltas de 128 bits, así que ese coste se comería cualquier ganancia.
+- La buena noticia: **NEON mide exactamente 128 bits, igual que los registros del SPU**, así que la traducción ya es uno a uno. `SHUFB`, la instrucción de mezcla estrella del SPU, se traduce a `TBL`/`TBX` de NEON (RPCS3 ya lo hace; `SPUCommonRecompiler.cpp` tiene la variante TBL2/TBX2).
+
+### Lo que sí aprovecha el hardware de Apple
+| Idea | Qué es | Beneficio para UC2 | Coste |
+|---|---|---|---|
+| **Host GPU Labels vía memoria unificada** | La memoria del M4 es compartida entre CPU y GPU. Con `external_memory_host`, la GPU escribe las etiquetas directamente en la memoria del PS3 emulado | Quita las esperas de sincronización por etiqueta (la causa de fondo del `RsxKick`) | Configuración (`Allow Host GPU Labels: true`) |
+| **PGO solo con Uncharted 2** | Compilar U2M4 con `-fprofile-generate`, jugar 10 min y recompilar con `-fprofile-use`. El compilador optimiza para el camino real del juego | Típicamente +5-15 % en el código C++ del emulador (FIFO del RSX, caché de texturas, DMA) | 2 compilaciones + 1 partida. Ideal porque solo nos importa un juego |
+| **`-mcpu=apple-m4`** en vez de `-march=native` | Además de las instrucciones, ajusta el código a la microarquitectura del M4 | Pequeño | Una línea en `build-m4.sh` |
+| **FPCR.FZ (flush-to-zero)** | El SPU real no tiene denormales. Con FZ activo en los hilos SPU, ARM los trata igual, gratis | Exactitud; evita la ruta lenta de denormales | Un parche pequeño en el arranque del hilo SPU. Hay que comprobar qué hace ya RPCS3 |
+| **Atómicos de 128 bits (LSE2 / CASP)** | El M4 hace atómicamente cargas de 16 bytes y compare-and-swap de 128 bits | Ya usado por la ruta rápida de reservas SPU (`Accurate SPU Reservations: false`) | Probar K4 cuando el juego sea estable |
+| **QoS por hilo** (hecho, 0001) | La única forma de separar núcleos P y E en macOS | Deja los 4 núcleos P a SPU, PPU y RSX | — |
+
+### Diagnóstico ingenioso: el modo TSO de Apple
+Los chips Apple tienen un **modo TSO por hardware**: el mismo orden de memoria que x86, el que usa Rosetta. En macOS no hay API pública para activarlo, pero **cualquier binario x86 ejecutado con Rosetta corre en TSO**.
+→ Prueba barata para confirmar la hipótesis del parche 0008: la **build oficial de RPCS3 para Intel (x86_64) con Rosetta**. Irá lenta, pero si no se cuelga al empezar a jugar, confirma que el cuelgue era de orden de memoria ARM.
+
+### Ideas grandes (si falta rendimiento al final)
+- **Renderizador Metal nativo:** fuera de alcance. Es un backend entero nuevo.
+- **Tamaño de página de 16 KB:** agrupar las protecciones de página de la caché de texturas (sección 6, D).
+- **Quitar comprobaciones que UC2 no necesita:** con el perfil U2M4 fijo, eliminar las rutas de precisión que el juego no usa, guiándonos por `sample`.
