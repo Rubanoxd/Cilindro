@@ -7,6 +7,7 @@
 #       0003 "Relaxed Back-End Semaphores": escribir etiquetas del RSX sin esperar a la GPU entera
 #       0004 "SPU Heuristics Host Thread Count": las heurísticas de espera SPU asumen >=12 hilos (M4 base = 10)
 #       0005 Fix: el intérprete de shaders no declaraba el binding del renderizado condicional emulado (Relaxed ZCULL en MoltenVK)
+#       0006 "Emulated Conditional Rendering": cond. render en GPU (predicado en shader) sin relajar los informes ZCULL
 # Reutiliza los scripts de CI de RPCS3 (.ci/build-mac.sh + .ci/deploy-mac.sh), que ya meten
 # MoltenVK 1.4.2 "privateapi" dentro de la app, como la build oficial.
 #
