@@ -1,0 +1,16 @@
+diff --git a/rpcs3/Emu/RSX/VK/VKShaderInterpreter.cpp b/rpcs3/Emu/RSX/VK/VKShaderInterpreter.cpp
+index 256428e..9ef7491 100644
+--- a/rpcs3/Emu/RSX/VK/VKShaderInterpreter.cpp
++++ b/rpcs3/Emu/RSX/VK/VKShaderInterpreter.cpp
+@@ -192,6 +192,11 @@ namespace vk
+ 			: 0;
+ 		VKVertexDecompilerThread comp(null_prog, shader_str, arr, *vk_prog);
+ 
++		// init() reserved a binding for the conditional rendering predicate when it is emulated (Relaxed ZCULL Sync on drivers
++		// without VK_EXT_conditional_rendering, e.g. MoltenVK). Declare it too, otherwise the pipeline layout has a hole and
++		// creation throws "Some input bindings were not declared". Task() normally sets this, but the interpreter never calls it.
++		comp.m_device_props.emulate_conditional_rendering = vk::emulate_conditional_rendering();
++
+ 		// Initialize compiler properties
+ 		comp.properties.has_indexed_constants = true;
+ 
