@@ -1,7 +1,7 @@
 #!/bin/sh -ex
 # Compila RPCS3 en el propio Mac (M4), igual que la build oficial pero con:
 #   - USE_NATIVE_INSTRUCTIONS=ON  (la oficial usa -march=armv8.4-a genérico)
-#   - opcional (PATCH=1): todos los parches 000*.patch de esta carpeta
+#   - opcional (PATCH=1): todos los parches 00NN-*.patch de esta carpeta
 #       0001 QoS de hilos compiladores (núcleos P para la emulación)
 #       0002 "ZCull Fake ZPass Value": con consultas ZCull desactivadas, informar píxeles visibles en vez de 0
 #       0003 "Relaxed Back-End Semaphores": escribir etiquetas del RSX sin esperar a la GPU entera
@@ -11,6 +11,7 @@
 #       0007 GPU Apple: cerrar render pass antes de copiar resultados de consultas (si no, llegan a 0) + predicado inicial "visible"
 #       0008 ARM64: barreras de memoria en las DMA del SPU (x86 ordena solo, ARM no) — JIT + C++
 #       0009 Caché persistente de objetos SPU (RPCS3 solo la guarda con SPU Debug): arranques sin recompilar ~9k funciones
+#       0010 GETLLAR del SPU: barrera acquire en la lectura tipo seqlock (ARM puede aceptar líneas de 128 B a medio escribir)
 # Reutiliza los scripts de CI de RPCS3 (.ci/build-mac.sh + .ci/deploy-mac.sh), que ya meten
 # MoltenVK 1.4.2 "privateapi" dentro de la app, como la build oficial.
 #
@@ -33,7 +34,7 @@ git checkout -f "$REV"
 git reset --hard
 
 if [ "${PATCH:-0}" = "1" ]; then
-  for p in "$HERE"/000*.patch; do git apply "$p"; echo "applied $p"; done
+  for p in "$HERE"/00[0-9][0-9]-*.patch; do git apply "$p"; echo "applied $p"; done
 fi
 
 # Instrucciones nativas del M4 en vez de armv8.4-a genérico

@@ -1,0 +1,16 @@
+diff --git a/rpcs3/Emu/Cell/SPUThread.cpp b/rpcs3/Emu/Cell/SPUThread.cpp
+index b790a23..be9249e 100644
+--- a/rpcs3/Emu/Cell/SPUThread.cpp
++++ b/rpcs3/Emu/Cell/SPUThread.cpp
+@@ -4622,6 +4622,11 @@ bool spu_thread::process_mfc_cmd()
+ 
+ 			mov_rdata(rdata, data);
+ 
++			// Seqlock read side: on ARM64 the data loads above may complete after the version re-check below
++			// (LDAR does not order earlier loads), accepting a torn 128-byte line. x86 never reorders loads.
++			// The PPU path (ppu_load_acquire_reservation) already has this fence.
++			atomic_fence_acquire();
++
+ 			if (u64 time0 = vm::reservation_acquire(addr); ntime != time0)
+ 			{
+ 				// Reservation data has been modified recently
