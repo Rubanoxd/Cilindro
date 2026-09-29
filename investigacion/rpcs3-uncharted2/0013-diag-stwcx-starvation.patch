@@ -1,0 +1,21 @@
+diff --git a/rpcs3/Emu/Cell/PPUThread.cpp b/rpcs3/Emu/Cell/PPUThread.cpp
+index 7fd29dd..2f7f6d2 100644
+--- a/rpcs3/Emu/Cell/PPUThread.cpp
++++ b/rpcs3/Emu/Cell/PPUThread.cpp
+@@ -3699,6 +3699,16 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
+ 			if (ppu.last_faddr == addr)
+ 			{
+ 				ppu.last_fail++;
++
++				// U2M4 diagnostic: report STWCX starvation (PPU never wins a reservation), with the current owner data
++				if (ppu.last_fail >= 0x10000 && !(ppu.last_fail & (ppu.last_fail - 1)))
++				{
++					ppu_log.error("U2M4: STWCX starvation addr=0x%x cia=0x%x fails=%u rtime=0x%x data=0x%016llx", addr, ppu.cia, ppu.last_fail, old_rtime, static_cast<u64>(old_data));
++				}
++			}
++			else
++			{
++				ppu.last_fail = 0;
+ 			}
+ 
+ 			ppu.last_faddr = addr;
