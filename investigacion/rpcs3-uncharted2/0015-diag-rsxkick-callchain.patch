@@ -1,0 +1,40 @@
+diff --git a/rpcs3/Emu/Cell/lv2/sys_tty.cpp b/rpcs3/Emu/Cell/lv2/sys_tty.cpp
+index fbc56c9..dad375b 100644
+--- a/rpcs3/Emu/Cell/lv2/sys_tty.cpp
++++ b/rpcs3/Emu/Cell/lv2/sys_tty.cpp
+@@ -129,6 +129,35 @@ error_code sys_tty_write([[maybe_unused]] ppu_thread& ppu, s32 ch, vm::cptr<char
+ 
+ 	sample = {}; // Remove reference to string
+ 
++	// U2M4 diagnostic: Uncharted 2 prints "RsxKick: *** Timeout ..." from its RSX/SPU watchdog. Log who called it
++	// (PPU back chain: frame[0] = back chain, frame[16] = saved LR, 64-bit ABI) so the timeout code can be patched.
++	if (msg.find("RsxKick") != umax)
++	{
++		static atomic_t<u32> s_dumps = 0;
++
++		if (s_dumps++ < 8)
++		{
++			std::string chain = fmt::format("lr=0x%x cia=0x%x", static_cast<u32>(ppu.lr), ppu.cia);
++			u32 sp = static_cast<u32>(ppu.gpr[1]);
++
++			for (u32 depth = 0; depth < 16 && sp && vm::check_addr(sp, vm::page_readable, 24); depth++)
++			{
++				const u32 saved_lr = static_cast<u32>(vm::read64(sp + 16));
++				fmt::append(chain, " | sp=0x%x lr=0x%x", sp, saved_lr);
++				const u32 next = static_cast<u32>(vm::read64(sp));
++
++				if (next <= sp)
++				{
++					break;
++				}
++
++				sp = next;
++			}
++
++			ppu_log.error("U2M4: RsxKick printed by thread '%s': %s", ppu.get_name(), chain);
++		}
++	}
++
+ 	if (msg.size() >= 2u && [&]()
+ 	{
+ 		static thread_local u64 last_write = 0;

@@ -13,4 +13,5 @@ La versión actual está en `VERSION`; `build-m4.sh` la graba en la app (Acerca 
 | 0.6 | 105c4988 | 0001–0011 | juega 13 s–3,5 min; 7/7 cuelgues empiezan 0,3 s tras un programa RSX nuevo |
 | 0.7 | 105c4988 | 0001–0012 | 1/4 llega a jugar (~69 s); dos fallos distintos: livelock lwarx/stwcx en la carga y tormenta RsxKick jugando tras ráfagas de shaders |
 | 0.8 | 105c4988 | 0001–0013 | hasta 8,5 min de juego y capítulo 3; RSX parado en JUMP-a-sí-mismo esperando un kick SPU que nunca llega |
-| 0.9 | 105c4988 | 0001–0014 | en pruebas (ORDEN #34) |
+| 0.9 | 105c4988 | 0001–0014 | récord: 12 min 56 s de juego (n=1; otras 55 s y 65 s). Solo desborda la cola del timer de 5,3 ms (4 huecos), ninguna del job manager |
+| 0.10 | 105c4988 | 0001–0015 | en pruebas (ORDEN #35) |
